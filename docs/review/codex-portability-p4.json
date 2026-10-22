@@ -1,0 +1,5 @@
+{
+  "verdict": "approved",
+  "summary": "ATLAS-P11 resolved: docs/database-design.md:67–68 now snapshots plan-author provider, family and registry revision at authoring; lines 195–197 require review author identities from historical snapshots. ATLAS-P21 resolved: docs/adr/ADR-007-portable-pluggable-providers.md:64–67 defines manual-provider declarations, mismatch rejection and fail-closed unknown identity; docs/how-to-use.md:106,117 updates both profiles, and docs/antigravity-manual-handoff.md:123–129 requires provider in imported results. No new MEDIUM-or-higher issues found in git diff main. Design review only; no files modified.",
+  "findings": []
+}

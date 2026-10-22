@@ -30,3 +30,5 @@
 |---|---|---|---|
 | P11 | MEDIUM | **Accepted.** `plans` snapshot author_provider, author_family and author_agent_revision at authoring, with authoring_execution_id as provenance. review_rounds copy author identity from plans or the authoring execution, never from the current registry | database-design.md |
 | P21 | MEDIUM | **Accepted.** Rule 4: a manual_handoff agent has a configured canonical provider or `local` (a recorded user declaration). The result must declare model + provider; a mismatch is rejected; missing = `unknown` (fail closed). Example profiles and the Antigravity result schema updated | ADR-007 §2, how-to-use §1.6/§5, antigravity-manual-handoff.md |
+
+## Round 4 (codex-portability-p4.json): **approved**. P11 and P21 resolved; no new MEDIUM+ findings.

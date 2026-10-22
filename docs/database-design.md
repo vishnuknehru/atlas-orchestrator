@@ -6,7 +6,7 @@ Status: Phase 0, revision 2 (after Codex review round 1) · 2026-10-22
 - SQLite 3, one file at `~/.atlas/atlas.db`, mode 0600, directory 0700.
 - Pragmas on every connection: `journal_mode=WAL`, `synchronous=FULL`, `foreign_keys=ON`, `busy_timeout=5000`.
 - Single writer: all writes go through one async write queue using `BEGIN IMMEDIATE`. Reads use a separate pool.
-- SQLAlchemy 2.x + Alembic. Before each migration, ATLAS makes a backup with the SQLite online backup API. A daily backup is also kept.
+- SQLAlchemy 2.x + Alembic. Before each migration, ATLAS makes a backup with the SQLite online backup API. A daily backup is also kept. All backups are quiesced and paired with `graph.db` (§5).
 - IDs are ULIDs stored as TEXT. Timestamps are UTC ISO-8601 TEXT. JSON columns are TEXT, validated by Pydantic.
 - Large content lives in a content-addressed blob store. The DB holds references.
 
@@ -284,5 +284,33 @@ CREATE TABLE audit_log (                        -- append-only
 - Creating a candidate marks open approvals for older candidates `superseded`. A change to `projects.policy_version` does the same for all open merge approvals.
 - Retention: blobs are garbage-collected only when no `artifact_refs` row points at them.
 
-## 5. Why not Postgres or an event store
+## 5. LangGraph checkpoint store (ADR-006)
+- This is a separate file, `~/.atlas/graph.db` (0600), owned by `langgraph-checkpoint-sqlite`'s schema and migrated only by that library, at a pinned version. It is not mixed into `atlas.db`, so Alembic and LangGraph migrations never collide.
+- It holds execution position and small JSON-safe state (IDs, enums, counters) only. It is **not** a source of truth for evidence, and it is never queried by the dashboard.
+- Every checkpoint's state carries `{entity_version, last_step_id, generation}` for the startup compatibility classification (ADR-006 §5).
+- **Backups are quiesced and paired** (ATLAS-L05): with the scheduler paused and no invocation running, both files are copied with the SQLite online backup API under one `backup_generation` id recorded in both. Restore refuses mismatched generations, and every thread is then re-classified.
+- ATLAS never builds checkpoint-list filters from external input (CVE-2025-67644 class). Checkpoints use `StrictJsonSerializer` (ADR-006 §6).
+
+App-DB table for the step-completion contract (ADR-006 §3):
+
+```sql
+CREATE TABLE workflow_steps (
+  step_id TEXT PRIMARY KEY, project_id TEXT NOT NULL,
+  entity_type TEXT NOT NULL CHECK (entity_type IN ('task','phase')), entity_id TEXT NOT NULL,
+  thread_id TEXT NOT NULL, generation INTEGER NOT NULL, node TEXT NOT NULL, entry_version INTEGER NOT NULL,
+  status TEXT NOT NULL CHECK (status IN ('started','effects_settled','completed','abandoned')),
+  candidate_id_in TEXT, candidate_id_out TEXT, result_ref TEXT, transition_id TEXT, abandon_reason TEXT,
+  created_at TEXT NOT NULL, completed_at TEXT,
+  UNIQUE (entity_id, node, entry_version),
+  CHECK (status <> 'completed' OR transition_id IS NOT NULL OR node IN (<nodes without transitions>)),
+  CHECK (status <> 'abandoned' OR abandon_reason IS NOT NULL)
+);
+CREATE UNIQUE INDEX one_unfinished_step ON workflow_steps(entity_id, node)
+  WHERE status IN ('started','effects_settled');      -- X_begin reuses it across version bumps (ADR-006 §3)
+-- executions.idempotency_key and outbox_ops.idempotency_key embed step_id;
+-- dispatch reservations (execution 'launching' / outbox 'in_flight') are inserted in the same txn as the fence check (ADR-006 §4)
+-- entities (tasks, phases) gain: pause_requested_at, cancel_requested_at, rebuild_target
+```
+
+## 6. Why not Postgres or an event store
 There is one user and one process, and the volume is low. SQLite WAL with `synchronous=FULL` is ACID and is backed up as a single file. The append-only `transitions` table gives history without a separate store. See ADR-002.

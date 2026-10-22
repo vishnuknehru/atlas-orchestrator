@@ -85,6 +85,15 @@ Controls:
 - No token extraction, no cookie use, no browser automation of provider UIs, no identity rotation, no re-invoking to dodge limits, and no API fallback (schema-enforced).
 - Antigravity is manual (ADR-003). Codex on public repos is blocked by default.
 
+### 3.10 LangGraph engine (ADR-001, ADR-006)
+- LangGraph's history includes HIGH-severity SQL injection in the SQLite checkpointer and deserialization RCE in checkpoint loading (CVE-2025-67644, CVE-2025-64104, CVE-2025-64439, CVE-2026-28277, CVE-2026-48775, CVE-2026-27794). Controls:
+  - pinned patched versions, with `pip-audit` blocking CI;
+  - a custom `StrictJsonSerializer` (ADR-006 §6) that decodes JSON only and rejects any other type tag before an object is constructed. No pickle, no msgpack ext types, no `BaseCache`;
+  - no `Store`, and no filter keys built from input;
+  - `graph.db` is 0600 and denied in every sandbox profile, so untrusted code can't plant malicious checkpoint bytes.
+- **No egress:** LangSmith/LangChain tracing variables are forced off, and no Platform, Studio or SDK client is used. A test asserts zero outbound connections during a fake end-to-end run.
+- **Authority:** graph routing calls the policy engine. Agent output is stored data and never selects an edge (§3.1 control 1 still holds).
+
 ### 3.9 Supply chain (ATLAS's own deps)
 - Python deps via `uv lock` (hashes). Frontend via `package-lock.json` with `npm ci`.
 - `pip-audit` and `npm audit --audit-level=high` in CI. Dependabot/Renovate on the ATLAS repo.
@@ -121,7 +130,7 @@ Environment scrubbing and cwd do **not** isolate credentials, because repository
   - is deny-by-default for file reads and writes, with these allowances:
     - **read**: the phase worktree; system and toolchain paths (`/usr`, `/System`, `/Library/Developer`, Homebrew prefix, the language toolchains the project declares, e.g. `~/.nvm/versions/node/<v>`, `~/.local/share/uv/python`); and read-only package caches the project declares;
     - **write**: the disposable verification worktree (never the developer worktree), and a per-execution `TMPDIR`/`HOME`/output dir under `~/.atlas/sandboxes/<execution_id>/`. Any source mutation invalidates the run's evidence (workflow-state-machine.md §0);
-  - **explicitly denies** `~/.atlas` (except the execution's own sandbox dir), `~/.ssh`, `~/.config/gh`, `~/.claude*`, `~/.codex`, `~/.gemini`/Antigravity data, `~/Library/Keychains`, other projects' clones and worktrees, and Keychain Mach services (`com.apple.securityd`, `com.apple.SecurityServer`);
+  - **explicitly denies** `~/.atlas` (except the execution's own sandbox dir; this denial covers `atlas.db` and `graph.db`), `~/.ssh`, `~/.config/gh`, `~/.claude*`, `~/.codex`, `~/.gemini`/Antigravity data, `~/Library/Keychains`, other projects' clones and worktrees, and Keychain Mach services (`com.apple.securityd`, `com.apple.SecurityServer`);
   - has network denied by default, with a per-project opt-in `tests.network: true` for integration tests that need it. Network-enabled runs are labelled.
 - **Alternative mechanism (D11):** run tests as a dedicated unprivileged macOS user `_atlasrunner` through a narrowly scoped `sudoers` rule. This is stronger than Seatbelt but needs one-time admin setup.
 - **Fail closed:** if neither mechanism is available or the profile self-test fails, test execution is unavailable and G-TEST cannot pass. The project shows `BLOCKED(no_test_sandbox)`.

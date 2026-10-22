@@ -1,0 +1,76 @@
+{
+  "verdict": "changes_required",
+  "summary": "LangGraph can fit the existing invariants, and the amendment preserves app-DB gate authority and candidate-bound evidence in principle. However, replay completion, pause coordination, divergence recovery, and incremental release safety remain underspecified. The security controls address the cited advisory classes conceptually but need validation against actual checkpoint payloads. No CRITICAL finding is established. This is an offline specification review; attributed LangGraph behavior was treated as given.",
+  "findings": [
+    {
+      "id": "ATLAS-L01",
+      "severity": "HIGH",
+      "category": "Replay safety",
+      "file": "docs/adr/ADR-006-langgraph-engine.md",
+      "location": "§3, lines 32–37",
+      "description": "The replay protocol lacks a durable, atomic step-completion contract. A node can persist its result or confirm its outbox operation, then crash before its final FSM transition. Returning the completed result on replay can skip that transition; repeating the transition after it committed can instead raise InvalidTransition. The key also lacks defined semantics when make_candidate or fix changes candidate_id, when attempts advance, and for task nodes without phase_id.",
+      "evidence": "ADR-006 lines 33–37 require a key of (phase_id, candidate_id, node, attempt), an early return for a completed result, and a final apply_transition. recovery-strategy.md §1 lines 21–24 already applies the FSM transition in the outbox CONFIRM transaction. database-design.md §3 lines 135–149 and 255–261 define neither a unique execution step key nor a step-completion record. workflow-state-machine.md §3 line 140 makes invalid transitions non-retryable.",
+      "recommendation": "Define an immutable invocation identity for both task and phase nodes, allocated before effects and retained across replay. Specify one transaction that records result references, step completion, and the corresponding FSM transition, including how outbox confirmation participates. Test crashes after effect completion, result persistence, transition commit, and before checkpoint persistence, including candidate creation and repair loops."
+    },
+    {
+      "id": "ATLAS-L02",
+      "severity": "HIGH",
+      "category": "Pause and remote merge withdrawal",
+      "file": "docs/adr/ADR-006-langgraph-engine.md",
+      "location": "§4, line 43",
+      "description": "Stopping future thread resumes does not stop an invocation already executing nodes. The amendment's pause/cancel rule permits recording PAUSED while an active invocation continues toward another external effect. It also omits the mandatory withdrawal protocol when a remote merge is armed. This conflicts with the previously approved pause invariant.",
+      "evidence": "ADR-006 line 43 says pause and cancel stop scheduler resumes and record PAUSED. Lines 15–20 describe a graph containing implementation through merge nodes. workflow-state-machine.md §2 line 113 requires confirmed cancel_remote_merge before entering PAUSED and requires reconciliation and guard checks on resume.",
+      "recommendation": "Specify a coordinated pause protocol for active invocations: fence new node/effect dispatch, settle running executions and in-flight outbox operations, withdraw and confirm remote merge requests, then commit PAUSED. Require dispatch-time checks against pause/cancel state. Test pause during a running node, between nodes, immediately before merge dispatch, and while queued."
+    },
+    {
+      "id": "ATLAS-L03",
+      "severity": "HIGH",
+      "category": "Two-store recovery",
+      "file": "docs/recovery-strategy.md",
+      "location": "§3, lines 124–129",
+      "description": "The divergence check runs after recovery deliberately changes app-DB states to PAUSED, while graph checkpoints retain their prior execution positions. No compatibility relation distinguishes this expected overlay from corruption or the ordinary crash window after an app-DB transition but before a checkpoint. Moreover, genuine divergence has no defined recovery path: ordinary user Resume cannot repair a thread that is explicitly never repaired automatically.",
+      "evidence": "Recovery steps 12–13 first mark in-progress phases PAUSED and then compare checkpoint nodes with app-DB phase state. ADR-006 §3 lines 37–38 separately commits the app transition before checkpoint persistence and mandates BLOCKED on disagreement with no automatic repair. workflow-state-machine.md §2 line 114 requires a reason-specific allowlist for leaving BLOCKED, but engine_state_divergence has none.",
+      "recommendation": "Define compatibility using durable step identities, app versions, pending graph work, and PAUSED/resume_to overlays. Distinguish expected app-ahead crashes from incompatible histories. Provide an audited, user-triggered rebuild or recovery path from app-DB facts and confirmed effects, with tests for both commit/checkpoint crash windows and normal restart pauses."
+    },
+    {
+      "id": "ATLAS-L04",
+      "severity": "HIGH",
+      "category": "Incremental release safety",
+      "file": "docs/implementation-roadmap.md",
+      "location": "Phase 1 slice 1.4b, line 20; Phase 6, lines 75–78",
+      "description": "The roadmap postpones the graph divergence check until Phase 6 even though two-store execution starts in Phase 1 and real effects arrive in Phases 2–5. This contradicts the engine's requirement that startup checks precede every thread resume. Slice 1.4b also does not explicitly restrict its no-op graphs to tests or require runtime rejection of unavailable work, leaving its independently mergeable behavior unclear.",
+      "evidence": "Slice 1.4b introduces task and phase graphs with no-op nodes wired to apply_transition and a kill-and-resume test. Slice 1.6 only promises startup PAUSED. Phase 6 introduces the LangGraph divergence check. ADR-006 §4 line 42 requires startup recovery before any thread resumes; roadmap line 7 requires unavailable capabilities to remain absent and disabled.",
+      "recommendation": "Ship graph/app compatibility checks and safe explicit resume with slice 1.4b or 1.6. Mark fake/no-op execution as test-only and require production nodes for unavailable capabilities to fail closed. Bring each process, candidate, outbox, and GitHub recovery prerequisite into the phase introducing that effect. Test restart followed by user Resume in every released phase."
+    },
+    {
+      "id": "ATLAS-L05",
+      "severity": "MEDIUM",
+      "category": "Backup and restore",
+      "file": "docs/database-design.md",
+      "location": "§5, lines 288–290",
+      "description": "Backing up the two databases 'together' does not define a consistent backup boundary. Independent online backups can capture different workflow generations. A node/state-only divergence check can also miss skew when a repair loop returns to the same node and FSM state with a different candidate or attempt.",
+      "evidence": "database-design.md §1 line 9 specifies SQLite online backups; §5 line 290 says both stores are restored and the divergence check covers skew. ADR-006 §3 line 38 defines that check only in terms of checkpoint node and phase state. ADR-002 §Consequences line 23 still claims there is one file to back up.",
+      "recommendation": "Specify a quiesced backup boundary or a shared backup generation with durable app-step/version references in checkpoints. Validate both stores and their generation on restore, including missing threads and same-node/different-candidate histories. Update the obsolete single-file backup claims."
+    },
+    {
+      "id": "ATLAS-L06",
+      "severity": "MEDIUM",
+      "category": "Checkpoint security validation",
+      "file": "docs/adr/ADR-006-langgraph-engine.md",
+      "location": "§5, line 49",
+      "description": "Validating the application state model does not establish that every value serialized by the checkpointer is a JSON primitive. Interrupts, resume commands, pending writes, and engine metadata may use additional representations. The amendment relies on JSON-only checkpointing as a deserialization control without a test confirming that the chosen serializer and pinned engine support the complete workflow under that restriction.",
+      "evidence": "ADR-006 line 49 promises JSON primitives validated before each write and pickle_fallback=False, while §2 lines 16–22 uses interrupts and Command(resume=...). Roadmap slice 1.4b lists a JSON-only state model but no checkpoint-format or hostile-deserialization test.",
+      "recommendation": "Explicitly configure the serializer and define which engine-owned types are permitted. Against pinned dependencies, test persisted checkpoints and pending writes across interrupts, retries, crashes, and resume. Include negative tests for unsupported or malicious serialized types and verify that rejection occurs before object construction."
+    },
+    {
+      "id": "ATLAS-L07",
+      "severity": "LOW",
+      "category": "Decision rationale",
+      "file": "docs/adr/ADR-001-build-vs-adopt.md",
+      "location": "Evaluation, lines 11–19; Consequences, lines 36–39",
+      "description": "The evaluation supports selecting a library rather than an orchestrator application, but does not substantiate the stated delivery-speed criterion. It claims persistence and resume become faster while retaining a second FSM, a second store, custom replay safety, and custom reconciliation. Those integration costs are absent from the comparison with the bespoke alternative.",
+      "evidence": "ADR-001 line 7 names security, market testing, and delivery speed as criteria; line 37 asserts faster delivery. ADR-006 §3 lines 30–38 adds replay and divergence machinery, while ADR-001 lines 23–32 retains the safety-critical ATLAS components.",
+      "recommendation": "Add an explicit comparison with the former bespoke design and a bounded integration spike with acceptance criteria for replay, interrupts, recovery, and engineering effort. Treat faster delivery as a hypothesis until that spike passes; the user's engine choice can remain accepted."
+    }
+  ]
+}

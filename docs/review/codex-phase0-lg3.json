@@ -1,0 +1,26 @@
+{
+  "verdict": "changes_required",
+  "summary": "ATLAS-L01 and ATLAS-L02 are fully resolved at the specification level by checkpointed invocation identities and serialized dispatch reservations with safety-operation exceptions. ATLAS-L03 remains unresolved. One new HIGH defect concerns replay of abandoned steps. Gate authority, candidate-bound evidence, project isolation and sandbox denial remain explicit requirements. Security controls and unverified engine behavior have mandatory spike tests; ADR-001 now treats delivery speed as a hypothesis, and slice 1.4b explicitly fails closed. This review assessed repository specifications without verifying attributed LangGraph claims or executing tests.",
+  "findings": [
+    {
+      "id": "ATLAS-L03",
+      "severity": "HIGH",
+      "category": "Two-store recovery",
+      "file": "docs/recovery-strategy.md",
+      "location": "§3, lines 126–132; docs/adr/ADR-006-langgraph-engine.md §5.1–5.2, lines 91–106",
+      "description": "Startup still lacks a consistent ordering for completing successful unfinished steps and applying recovery overlays. The recovery sequence enters PAUSED before invoking the deterministic completion function, whereas ADR-006 places unfinished-step resolution before the PAUSED overlay. For an execution that succeeded before its completion transaction, the documented startup sequence attempts the original FSM transition from PAUSED. That transition is invalid; no rule completes the underlying state while preserving the overlay or updates resume_to. Normal crash recovery can therefore fail before classification and explicit Resume.",
+      "evidence": "recovery-strategy.md lines 126–129 first mark in-progress phases PAUSED, then complete succeeded steps from recorded results. ADR-006 line 96 requires the completion function to run inside the completion transaction, which includes apply_transition (§3 line 44). Its §5.2 heading instead places classification after both step resolution and the PAUSED overlay. workflow-state-machine.md lines 113 and 133–140 permit PAUSED to exit through resume_to and reject invalid transitions without retry. For example, a successful TESTING step cannot directly complete TESTING→CODE_REVIEW after startup has changed the phase to PAUSED(resume_to=TESTING).",
+      "recommendation": "Define one authoritative startup order across both documents. Complete and reconcile successful steps before applying PAUSED, or explicitly specify transactional overlay-aware completion that advances the underlying state and resume_to without removing the pause. Test a successful execution followed by a crash before completion, asserting that startup finishes, the result is consumed once, and the phase remains paused at the correct continuation."
+    },
+    {
+      "id": "ATLAS-L21",
+      "severity": "HIGH",
+      "category": "Abandoned-step replay",
+      "file": "docs/adr/ADR-006-langgraph-engine.md",
+      "location": "§3, lines 38–44; §5.1–5.2, lines 97–108",
+      "description": "The newly introduced abandonment path does not redirect a checkpoint already positioned at X_run. Recovery marks an interrupted or failed step abandoned and says a later X_begin will allocate its replacement, but ordinary compatible resume replays X_run with the old current_step_id. X_run only special-cases completed steps; every other status proceeds to effects under the old identity. Consequently, a normal interrupted execution can reuse an abandoned invocation, bypass its recorded retry decision, or remain stuck against its failed execution instead of creating the required fresh attempt.",
+      "evidence": "Line 97 abandons failed/interrupted steps and relies on 'a later X_begin' to allocate a fresh step. Lines 38–40 require X_run to use the checkpointed ID and perform effects unless the step is completed. Lines 104–108 classify recovery overlays as compatible and resume the existing thread; abandonment has no specified graph rewind or replacement-ID handoff. The separate rebuild path is reserved for engine_state_divergence and therefore does not resolve this ordinary restart case.",
+      "recommendation": "Give X_run an explicit abandoned-status branch that cannot dispatch effects or complete the old step. Persist a retry disposition and route through a fresh X_begin, with writer preservation/reset and retry limits enforced before replacement dispatch. Test restart with an X_run checkpoint whose execution was interrupted, for both read-only and writer roles, asserting a fresh step identity and no reuse of the abandoned invocation."
+    }
+  ]
+}

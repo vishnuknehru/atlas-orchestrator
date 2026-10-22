@@ -19,6 +19,6 @@ ATLAS is a local-first macOS application. It coordinates official AI coding-agen
 | [github-integration.md](docs/github-integration.md) | Branch / PR / CI / merge design |
 | [implementation-roadmap.md](docs/implementation-roadmap.md) | Phases 1–10 |
 | [risks-and-decisions.md](docs/risks-and-decisions.md) | Risks, mitigations, decisions needing approval |
-| [adr/](docs/adr/) | Architecture decision records |
+| [adr/](docs/adr/) | Architecture decision records. ATLAS is built on **LangGraph** ([ADR-001](docs/adr/ADR-001-build-vs-adopt.md), [ADR-006](docs/adr/ADR-006-langgraph-engine.md)) |
 | [evidence/](docs/evidence/) | Captured CLI `--help` and version output |
 | [review/](docs/review/) | Independent Codex review of Phase 0 and responses |

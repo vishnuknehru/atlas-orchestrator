@@ -16,6 +16,11 @@ Status: Phase 0 draft · 2026-10-22
 | R16 | `sandbox-exec` is deprecated by Apple and could be removed or changed | Low–Medium | High | The canary self-test on every start detects breakage. The dedicated-user mechanism is the fallback (D11) |
 | R17 | Agent tool sandboxes may allow reads outside the worktree (cross-project exposure) | Medium | High | Phase 2 verification. An outer Seatbelt wrapper or dedicated user if confirmed (security-model.md §5.2) |
 | R18 | Evidence drift: what was reviewed ≠ what is merged | — (designed out) | Critical | Immutable candidate commits, evidence bound to `candidate_id`, `--match-head-commit`, G-MERGED head check |
+| R19 | LangGraph checkpointer vulnerabilities: SQLi and deserialization RCE history | Medium | High | Pinned patched versions, `pip-audit` gate, `StrictJsonSerializer`, no pickle/`Store`/`BaseCache`, `graph.db` 0600 and sandbox-denied (ADR-006 §6–7) |
+| R20 | LangGraph replay re-runs nodes and duplicates side effects | Medium | High | Step-completion contract (ADR-006 §3) with crash-window tests |
+| R23 | LangGraph speed benefit not realised | Medium | Medium | Slice 1.0 spike with pass/fail. Revert path through the `WorkflowEngine` interface |
+| R21 | Graph checkpoint and app DB diverge after a crash or restore | Low | Medium | App DB is authoritative; startup divergence check → BLOCKED, never auto-repaired |
+| R22 | LangGraph API churn (frequent releases) and transitive `langchain-core` | Medium | Low–Medium | Pin versions; `WorkflowEngine` interface as the exit path (ADR-006 §6); upgrades go through Renovate PRs with full gates |
 | R8 | Broad `gho_` gh token (repo + workflow on all repos) | Medium | High | Per-project fine-grained PAT in Keychain (D3). gh never exposed to agents |
 | R9 | Duplicate/partial GitHub ops after crash | Medium | High | Outbox + reconciliation + `--match-head-commit` + PR body marker. Crash-point test matrix |
 | R10 | Agents return non-conforming output | High | Low | Schemas. A missing `structured_output` counts as failure. One retry with a "return valid JSON" prompt, then BLOCKED |
@@ -29,7 +34,8 @@ Status: Phase 0 draft · 2026-10-22
 
 | ID | Decision | Recommendation | Status |
 |---|---|---|---|
-| D1 | Build vs. adopt (ADR-001) | Bespoke core + audited libraries | **Needs approval** |
+| D1 | Build vs. adopt (ADR-001) | User asked for "adopt if secured, well tested, fast". Orchestrator apps were evaluated and failed the security bar. **Build ATLAS on LangGraph** (engine) with ATLAS-owned gates/outbox/GitHub/dashboard | ✅ Approved 2026-10-22 |
+| D12 | Encrypt LangGraph checkpoints (`EncryptedSerializer`, key in Keychain) | Optional. State holds only IDs/enums, so the benefit is small | **Needs decision** |
 | D2 | Antigravity integration mode (ADR-003) | Manual handoff with detailed runbook | ✅ Approved 2026-10-22 |
 | D3 | GitHub credential | Per-project fine-grained PAT in Keychain. Until then, the existing gh login, with the scope risk acknowledged | **Needs approval** |
 | D4 | When Antigravity QA is pending for long | Wait (default). Optional per-task reassignment to the non-implementing headless agent | **Needs approval** |

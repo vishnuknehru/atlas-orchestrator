@@ -1,55 +1,46 @@
-# ADR-001: Build a small bespoke orchestration core on audited libraries
+# ADR-001: Build ATLAS on LangGraph; do not adopt an orchestrator app
 
-- Status: Proposed (pending Codex challenge and user approval)
+- Status: **Accepted by user on 2026-10-22** (revised; it supersedes the earlier "bespoke core" proposal). Pending Codex challenge of the revision.
 - Date: 2026-10-22
 
 ## Context
-The user asked whether ATLAS should adopt an existing open-source orchestrator instead of building one. They added that the result "must be secured well". ATLAS's distinguishing requirements are:
-- gated adversarial review with an evidence model;
-- independence enforcement;
-- idempotent, reconciled GitHub side effects;
-- durable crash recovery;
-- subscription-only, terms-respecting agent use (including manual Antigravity);
-- strict prompt-injection boundaries.
+The user asked to adopt an existing orchestrator **if it is secured, well tested in the market, and fast-tracks delivery**. Candidates were evaluated on 2026-10-22 using GitHub data (`gh api`), READMEs, published security advisories and official docs.
 
-## Options evaluated (desk research, 2026-10-22)
+## Evaluation
 
-| Option | What it is | Fit | Security / trust concerns |
-|---|---|---|---|
-| Vibe Kanban, claude-squad, Conductor, Emdash, Rove | UIs/TUIs to run several coding agents side by side in worktrees | Covers worktree management only. No plan challenge, evidence-gated merges, outbox, or policy engine | Fast-moving; no published security audits found. Usually runs agents in permissive modes. Would hold gh credentials for every repo |
-| Orchestrator.inc `agent-orchestrator` (Apache-2.0) | Desktop + mobile app for agent teams, task to merged PR | Closest in scope | Large surface (desktop + mobile + remote). Unclear credential handling and remote components. Adopting it means trusting the vendor's code path to merge into main |
-| claw-orchestrator | Headless runtime for multiple CLIs incl. Antigravity; "done only when checks it didn't write pass" | Good ideas (independent checks) | Automates Antigravity, which conflicts with ADR-003. Spend-cap features are aimed at API billing |
-| Temporal / Prefect / Hatchet | Durable workflow engines | Durable execution | Need a server and Postgres. Violates the "no unnecessary infra" constraint |
-| DBOS Transact (MIT) | Library-level durable workflows | Attractive model | Python version is Postgres-first. SQLite support for Python not confirmed. Adds a framework whose semantics we must trust for recovery |
-| LangGraph (+ SQLite checkpointer) | Agent graph framework | Checkpointing | Designed around direct LLM API calls, not CLI subprocesses. Heavy dependency for little gain |
-
-Sources: [augmentcode survey](https://www.augmentcode.com/tools/open-source-agent-orchestrators), [OrchestratorInc/agent-orchestrator](https://github.com/OrchestratorInc/agent-orchestrator), [claw-orchestrator](https://github.com/Enderfga/claw-orchestrator), [DBOS Python](https://github.com/DBOS-project/dbos-transact-py), [DBOS June 2026 update](https://dbos.dev/blog/new-in-dbos-june-2026).
+| Candidate | Fit | Maturity | Security evidence | Verdict |
+|---|---|---|---|---|
+| Vibe Kanban (Apache-2.0, 28k★) | Worktrees, PR, merge | README: **"Vibe Kanban is sunsetting"**; last release 2026-04-24 | No advisories | ❌ Sunsetting |
+| claude-squad (AGPL-3.0, 8.6k★) | tmux + worktrees only | Last release 2026-08-20, 20 contributors | No SECURITY.md | ❌ Weak fit |
+| Orchestrator.inc agent-orchestrator (Apache-2.0, 13k★) | **Best functional fit** (planner, workers, reviewer agents, PR/CI kanban) | ~576 commits in 30 days, nightly releases, 988 open issues, project 8 months old | No SECURITY.md. README tells macOS users to bypass Gatekeeper for an unverified app. Docs: reviewer modes "do not sandbox tools or network access". Auto-update | ❌ Fails "secured" |
+| Emdash (Apache-2.0, 6k★) | Worktrees, PR, CI, merge; no planning/review roles | ~222 commits in 30 days | No SECURITY.md. Writes hooks into user-level agent config. Optional telemetry | ❌ Fails "secured"; partial fit |
+| OpenHands (MIT, 91k★) | Agent server driving Claude Code/Codex via ACP; no worktree/PR/review workflow | Very mature | Working disclosure process (high-severity command injection fixed 2026-03). Claude ACP adapter is built on the Agent SDK, which is a grey area for subscription use | ⚠️ Low fit |
+| **LangGraph** (MIT, 43k★, since 2023, LangChain Inc.) | **Workflow engine**: state graphs, durable checkpoints, retries, `interrupt()` human-in-the-loop. Nodes are plain Python, so they can run `claude -p` / `codex exec` subprocesses on subscriptions with no API key | Releases every few days (1.2.16 on 2026-10-16), large user base | **Active disclosure process: 13 published advisories, including ZDI reports, all fixed.** Includes HIGH issues in the SQLite checkpointer (CVE-2025-67644, CVE-2025-64104 SQLi) and checkpoint deserialization RCE (CVE-2025-64439, CVE-2026-28277, CVE-2026-48775) | ✅ **Selected** as the engine |
+| Temporal / Prefect / Hatchet / DBOS | Durable workflows | Mature | — | ❌ Need servers or Postgres |
 
 ## Decision
-**Build** a small core for the security-critical parts:
-- FSM + transition log;
-- policy engine (gates, independence, diff guards);
-- outbox + reconciliation;
-- supervisor;
-- adapters;
-- handoff validation.
+- **Adopt LangGraph** (`langgraph` + `langgraph-checkpoint-sqlite` only) as ATLAS's workflow engine. It provides the state graph, durable checkpointing, retry policies, and the interrupts that pause for approvals and manual handoffs. See [ADR-006](ADR-006-langgraph-engine.md) for how it is used safely.
+- **Keep ATLAS-owned:**
+  - the policy and gate engine;
+  - the candidate/evidence model;
+  - the outbox and GitHub reconciliation;
+  - worktrees;
+  - the test sandbox;
+  - agent subprocess adapters;
+  - the dashboard.
 
-Estimated size: roughly 3–5k lines of Python, each piece unit-testable in isolation.
-
-**Adopt** well-known, widely deployed libraries and tools for everything else:
-- FastAPI, Pydantic, SQLAlchemy/Alembic, SQLite, structlog;
-- React, Vite, Tailwind;
-- pytest, Hypothesis, Vitest, Playwright;
-- the official provider CLIs, git, gh.
+  LangGraph provides none of these, and they hold the safety guarantees challenged in Phase 0.
+- **Do not adopt** an orchestrator *application* now. Re-evaluate Orchestrator.inc in 6 months: it would need a security policy, signed and notarized builds, and documented permission defaults.
+- **Do not use** LangGraph Platform/Server, LangGraph Studio, LangSmith tracing, or any `langchain-*` model integrations. ATLAS is local-only, with no data egress and no API keys.
 
 ## Consequences
-- **Plus:** full control over the parts where bugs lead to bad merges or terms violations. A minimal dependency surface, and no third-party code holding credentials.
-- **Minus:** we write and maintain the recovery logic ourselves. This is mitigated by the crash-point fault-injection suite (recovery-strategy.md §5).
-- **Reopen if:** a mature library emerges with SQLite-native durable workflows for Python, or the user prefers a specific tool after their own review.
+- **Expected faster, not yet proven (ATLAS-L07):** graph execution, checkpoint persistence, retries and interrupts come from a widely deployed, security-researched library. ATLAS still has to build the step-completion contract, pause protocol, two-store classification and a strict serializer (ADR-006), which offsets part of the gain.
+
+  Compared with the bespoke design: LangGraph removes the custom graph runner and checkpoint persistence, but adds about four integration mechanisms. The gain is therefore a **hypothesis tested by roadmap slice 1.0**, a ≤ 3-day spike with pass/fail criteria. If it fails, ATLAS reverts to the bespoke engine through the `WorkflowEngine` interface, with no loss to the rest of the design.
+- **New risks:** LangGraph replay semantics (a node re-runs from its start on resume), dependency churn, and the SQLite checkpointer's CVE history. These are mitigated in ADR-006 and security-model.md §3.10.
+- **Unchanged:** the Phase 0 gates, evidence model and recovery invariants.
 
 ## Supply-chain controls
-- Locked dependencies with hashes.
-- `pip-audit` / `npm audit` in CI.
-- Renovate/Dependabot.
+- Locked dependencies with hashes (`uv lock`), and versions pinned at or above the patched releases for every advisory above.
+- `pip-audit` in CI, so any new GHSA blocks the build. Renovate PRs for upgrades, which go through the same gates.
 - Licence check: MIT/BSD/Apache only.
-- Each new runtime dependency is justified in its PR.

@@ -1,0 +1,36 @@
+{
+  "verdict": "changes_required",
+  "summary": "ATLAS-L01, L02 and L03 remain unresolved. L04, L05, L06 and L07 are fully resolved at the specification level. No additional MEDIUM-or-higher defect is established. The amendment preserves gate authority and candidate-bound evidence in principle, but its replay lookup, pause fencing and recovery protocol still contain gaps. Security and engine compatibility now have explicit spike tests. This is an offline specification review; attributed LangGraph behavior was treated as given.",
+  "findings": [
+    {
+      "id": "ATLAS-L01",
+      "severity": "HIGH",
+      "category": "Replay safety",
+      "file": "docs/adr/ADR-006-langgraph-engine.md",
+      "location": "§3, lines 30–51",
+      "description": "The completion transaction is now atomic, but replay cannot reliably find that completed step. Node entry reads the current app-DB version to construct its lookup key. If completion committed at version v+1 but the checkpoint still represents entry at v, replay looks for (entity_id, node, v+1), misses the completed row keyed by v, and allocates a new step. Its effects therefore receive a new idempotency key. This is exactly the completion-before-checkpoint crash window the protocol claims to handle.",
+      "evidence": "Lines 30–34 require reading the entity's version on every node entry and looking up that entry_version. Lines 42–43 commit the transition and completion together, and line 34 states that transitions bump the version. Nevertheless, lines 44 and 51 assert that replay finds the completed step. §5 line 78 relies on the same assertion for app-ahead recovery.",
+      "recommendation": "Persist the invocation's immutable step identity or entry version in graph state before effects, and use that identity on replay rather than the current entity version. Define how startup overlays and rebuilds retain or resolve it. Test completion committed at v+1 with a checkpoint still at v, asserting that no new step, execution or outbox operation is allocated."
+    },
+    {
+      "id": "ATLAS-L02",
+      "severity": "HIGH",
+      "category": "Pause and remote merge withdrawal",
+      "file": "docs/adr/ADR-006-langgraph-engine.md",
+      "location": "§4, lines 56–61",
+      "description": "The coordinated pause protocol remains incomplete. It forbids every outbox EXECUTE after setting the fence, but subsequently requires cancel_remote_merge through that same outbox. No exception permits this safety operation. It also specifies a fence check without serializing it against effect dispatch: a merge dispatcher can pass the check, then execute after pause has fenced and inspected outstanding work. The requested pause tests do not explicitly cover that interleaving.",
+      "evidence": "Line 56 says that every node checks before outbox EXECUTE and that a set fence means the node does not dispatch. Lines 57–58 then require settling operations and confirming cancel_remote_merge. recovery-strategy.md §1, line 37 requires reissuing withdrawal when still queued or armed. ADR-006 line 63 lists pause scenarios but does not define an atomic dispatch reservation or fence acknowledgement.",
+      "recommendation": "Define a serialized dispatch/fence protocol that accounts for every dispatch already authorized before the fence, and wait for its acknowledgement before withdrawal and PAUSED. Explicitly allow reconciliation and withdrawal operations under the fence while rejecting ordinary effects. Test pause between the final dispatch check and subprocess launch, and verify that withdrawal can execute while fenced."
+    },
+    {
+      "id": "ATLAS-L03",
+      "severity": "HIGH",
+      "category": "Two-store recovery",
+      "file": "docs/adr/ADR-006-langgraph-engine.md",
+      "location": "§5, lines 73–88",
+      "description": "The added classification and rebuild names do not yet define a complete recovery contract. The paused-overlay rule leaves version compatibility undefined even though startup can perform several transitions before classification. Rebuild then assumes all prior effects are reconciled and starts from the app state, without specifying how started or effects_settled steps are completed, abandoned or transferred. An execution can succeed before its completion transaction, leaving the FSM at the old node; rebuilding that node under a new version can allocate another step and repeat the execution instead of consuming its durable result.",
+      "evidence": "Line 79 accepts a paused overlay when resume_to and version are 'compatible' without defining that relation. Lines 83–86 archive the thread, increment generation and start at the app state, asserting that nothing repeats. The step schema explicitly permits started and effects_settled rows (§3 lines 23–26), but rebuild does not handle them. recovery-strategy.md §3, lines 118–130 reconciles outbox operations, remote merge withdrawal and PAUSED transitions before classification; §2.4 distinguishes successful executions from interrupted ones.",
+      "recommendation": "Specify compatibility using transition history and exact durable invocation identities, including recovery-generated transitions. Before rebuilding, reconcile every unfinished step and explicitly retain its identity/result, complete it transactionally, or abandon it with a justified retry decision. Define the authoritative target state retained when entering BLOCKED. Test rebuild after successful execution but before step completion, after outbox confirmation, and after withdrawal plus the PAUSED overlay."
+    }
+  ]
+}

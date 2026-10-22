@@ -44,7 +44,8 @@ A single Python 3.12 process (`atlas serve`) contains:
 | Component | Responsibility |
 |---|---|
 | **API layer** (FastAPI) | REST endpoints and SSE event stream for the dashboard. Binds to `127.0.0.1` only and requires a per-install session token. |
-| **Orchestrator** | The only component allowed to change workflow state. Applies validated FSM transitions inside DB transactions. Reads gate policy from config, never from agent output. |
+| **Workflow engine (LangGraph)** | Runs the task and phase graphs with durable SQLite checkpoints (`~/.atlas/graph.db`, `durability="sync"`), retries, and `interrupt()` pauses for approvals, CI waits and manual handoffs. It holds *where execution is*, never *what is true*. See [ADR-006](adr/ADR-006-langgraph-engine.md). |
+| **Orchestrator** | The only component allowed to change workflow state. Graph nodes call it to apply validated FSM transitions inside app-DB transactions, and graph routing functions call the policy engine. Reads gate policy from config, never from agent output. |
 | **Scheduler** | Chooses the next runnable phase across projects: priority, dependency satisfaction, repo lock, agent capacity. Default concurrency is one code-changing phase per repo and one global agent invocation per provider. |
 | **Supervisor** | asyncio task that spawns and monitors subprocesses: agents, git, gh, test commands. Records PID, process start time, process group, and stdout/stderr artifact files. Enforces timeouts and sends SIGINT → SIGTERM → SIGKILL in that order. |
 | **Agent adapters** | One per provider. Build an argv from a vetted template, parse output into typed results, and classify failures into capacity states. Never interpret agent text as instructions to ATLAS. |
@@ -57,13 +58,14 @@ A single Python 3.12 process (`atlas serve`) contains:
 | **Recovery service** | Runs at startup before the scheduler. Reconciles DB state against git, GitHub and processes. |
 | **Audit/log** | Structured JSON logs with correlation IDs, an append-only `transitions` table and `audit_log` table, and secret redaction. |
 
-There is no Redis, broker or Postgres. A single process with SQLite is enough at this scale (ADR-002). `launchd` keeps it running (Phase 10).
+There is no Redis, broker or Postgres. A single process with SQLite is enough at this scale (ADR-002). LangGraph runs in-process as a library (ADR-001, ADR-006). `launchd` keeps it running (Phase 10).
 
 ## 4. Data and directory layout
 
 ```
 ~/.atlas/
-  atlas.db                 # SQLite WAL (global + per-project rows, project_id FK everywhere)
+  atlas.db                 # SQLite WAL app DB: the source of truth (global + per-project rows, project_id FK everywhere)
+  graph.db                 # LangGraph checkpoints: execution position only (0600, never readable by sandboxes)
   config.yaml              # global config (non-secret)
   projects/<project_id>/
     project.yaml           # project config (copied from user input; repo copy is NOT trusted)
@@ -162,7 +164,7 @@ The default role assignment follows the brief. The policy engine enforces **ADR-
 
 ## 10. Technology choices
 
-Backend: Python 3.12, FastAPI, Pydantic v2, SQLAlchemy 2.x + Alembic, SQLite WAL, asyncio subprocess, `structlog`.
+Backend: Python 3.12, FastAPI, Pydantic v2, **LangGraph + langgraph-checkpoint-sqlite** (workflow engine; no LangSmith/Platform/model integrations), SQLAlchemy 2.x + Alembic, SQLite WAL, asyncio subprocess, `structlog`.
 Frontend: React + TypeScript + Vite + Tailwind.
 Tests: pytest (+ pytest-asyncio, hypothesis for FSM properties), Vitest, Playwright.
 Packaging: `uv` with a lockfile for Python and `npm ci` with a lockfile for the frontend. `pip-audit` and `npm audit` run in CI.

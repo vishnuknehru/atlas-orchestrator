@@ -21,6 +21,8 @@ The local candidate commit is not an outbox op, because it is local and idempote
 1. INTENT    (DB txn) insert outbox_op(status=pending, idempotency_key, intent incl. candidate_id + expected SHAs)
 2. EXECUTE   (DB txn) status=in_flight, attempts+=1 → re-check the op's precondition guard (e.g. G-MERGE-PRE) → run git/gh
 3. CONFIRM   read back remote/local state → (DB txn) status=confirmed, remote_ref=…, apply FSM transition
+             — this txn IS the workflow step's completion txn (ADR-006 §3): result refs + outbox confirm +
+               FSM transition + workflow_steps.status=completed commit together
    on error  classify → failed (retryable) | reconciling (unknown outcome) | abandoned (needs user)
 ```
 
@@ -120,11 +122,23 @@ Ignored files are not preserved, since they are build output by definition. The 
        phase state — and for every in-flight cancel_remote_merge: run/complete cancel_remote_merge and confirm it,
        because step 12 is about to pause the phase and a paused phase must not have a live remote merge request.
        Not confirmable → BLOCKED(remote_merge_not_withdrawn) + prominent alert; its repo lock is NOT released.
-11. Release repo_locks held by dead instances only after their phase is PAUSED/BLOCKED/terminal and step 10a confirmed
-12. Mark every in-progress phase PAUSED(resume_to=…) unless config `recovery.auto_resume: true`
-       (a phase whose merge request was withdrawn resumes to CI_VALIDATION, never to MERGING)
-13. Audit "recovery_completed"; UI banner; start scheduler
+11. (reserved: lock release moved to 12a)
+11a. Resolve unfinished workflow steps (ADR-006 §5.1) BEFORE any overlay: succeeded execution / confirmed op →
+       complete the step from its recorded result via its normal transition (no re-run); known failure → abandon
+       with retry disposition (writers: preserve + reset first, §2.3); unknown outcome → BLOCKED(effect_outcome_unknown)
+12. Mark every in-progress phase PAUSED(resume_to=<its state after 11a>) unless config `recovery.auto_resume: true`.
+       Recovery records facts (e.g. "remote merge withdrawn") but never applies non-overlay transitions; on Resume the
+       graph node consumes the fact (await_remote_merge → CI_VALIDATION, never MERGING)
+12a. Release repo_locks held by dead instances only after their phase is PAUSED/BLOCKED/terminal and step 10a confirmed
+13. LangGraph thread classification (ADR-006 §5.2) from checkpoint {entity_version, current_step_id, generation} and
+       the app transition history since that version: consistent / compatible (own-step completion and recovery/user
+       overlay transitions only) / incompatible → BLOCKED(engine_state_divergence) with rebuild_target;
+       only exit is the audited user-triggered rebuild (ADR-006 §5.3)
+14. Audit "recovery_completed"; UI banner; start scheduler. No graph thread is resumed until steps 1–13 are complete,
+       and (until Phase 6) not until the user presses Resume
 ```
+
+**LangGraph replay:** resuming a thread re-runs the interrupted node from its start. Nodes are replay-safe by construction (ADR-006 §3): they use a step key, check the app DB first, and send every external effect through the outbox. Graph checkpoints are therefore never trusted as evidence that an external effect happened. Only §1 reconciliation decides that.
 
 The dashboard is read-only until step 13. Until Phase 6, `auto_resume` is forced to `false`: after any restart, everything waits for the user to press Resume (minimal safe restart, ATLAS-017).
 
@@ -163,7 +177,7 @@ The harness injects `os._exit(1)` at named points (`ATLAS_FAULT=<point>`), resta
 | create_pr done, before CONFIRM | PR found by marker. Exactly 1 PR |
 | merge done (or queued), before CONFIRM | MERGED (head verified) or MERGE_PENDING_REMOTE. No second merge call |
 | merge errored but GitHub merged | As above |
-| crash while MERGE_PENDING_REMOTE (queued/armed), approval expires before restart | Startup step 10a withdraws the request and confirms, then the phase is PAUSED(resume_to=CI_VALIDATION). No merge after the authorisation lapsed |
+| crash while MERGE_PENDING_REMOTE (queued/armed), approval expires before restart | Startup step 10a withdraws the request and confirms it, recording the fact. The phase becomes PAUSED(resume_to=MERGE_PENDING_REMOTE); on Resume the await node consumes "withdrawn" → CI_VALIDATION. No merge after the authorisation lapsed |
 | crash during `cancel_remote_merge` | Completed on restart before pausing. If GitHub already merged → BLOCKED(merged_after_authorisation_lapsed) |
 | user pauses a phase in MERGE_PENDING_REMOTE | Cancellation confirmed before PAUSED is entered |
 | human pushed a new head then merged while ATLAS was down | BLOCKED(external_merge_mismatch) |

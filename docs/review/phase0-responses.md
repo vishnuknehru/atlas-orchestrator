@@ -74,3 +74,46 @@ Codex: "ATLAS-008 is resolved at the documented architecture level … No open H
 - No open CRITICAL or HIGH findings, according to the independent reviewer.
 - MEDIUM and LOW findings were all addressed in rounds 1–2 (ATLAS-013, -016, -018, -104).
 - What was reviewed is **architecture documents only**. Every claim of the form "to verify in Phase N" is still unverified and is tracked in the roadmap.
+
+---
+
+# Amendment: ATLAS on LangGraph (user decision D1, 2026-10-22)
+
+The user asked to adopt an existing orchestrator if it is secured, well tested and faster. Orchestrator apps (Vibe Kanban, claude-squad, Orchestrator.inc, Emdash, OpenHands) were evaluated and failed the security bar or fit poorly. At the user's request, LangGraph was then evaluated, and the user chose **ATLAS on LangGraph** (ADR-001 revised, ADR-006 new).
+
+## Review LG-1 — `codex-phase0-lg1.json` — verdict `changes_required`, 7 findings (4 HIGH, 2 MEDIUM, 1 LOW)
+
+All 7 accepted.
+
+| ID | Sev | Response | Change made |
+|---|---|---|---|
+| ATLAS-L01 | HIGH | Accept | Step-completion contract: `workflow_steps` keyed by `(entity_id, node, entry_version)`, allocated before effects. Effects keyed by step_id. One txn commits result + outbox confirm + FSM transition + completion. Replay never re-applies. Crash-window table. ADR-006 §3; database-design.md §5; recovery-strategy.md §1 |
+| ATLAS-L02 | HIGH | Accept | Pause = fence (checked before every effect dispatch) → settle → withdraw remote merge → commit PAUSED. Same for cancel. Tests listed. ADR-006 §4 |
+| ATLAS-L03 | HIGH | Accept | Thread classification (consistent / app-ahead / paused overlay / incompatible) using `{entity_version, last_step_id, generation}` in checkpoints. Audited user-triggered rebuild as the only exit from engine_state_divergence. ADR-006 §5; recovery-strategy.md §3 step 13; FSM §5 |
+| ATLAS-L04 | HIGH | Accept | Classification, rebuild and safe resume ship in slice 1.4b. No-op nodes are test-only; unbuilt capabilities fail closed. Recovery ships with each effect-introducing phase. Roadmap |
+| ATLAS-L05 | MEDIUM | Accept | Quiesced, generation-paired backups. Restore validates the generation, then reclassifies. Obsolete single-file claim fixed in ADR-002 |
+| ATLAS-L06 | MEDIUM | Accept | Custom `StrictJsonSerializer` (JSON-only decode, type tags rejected before construction). Interrupt/resume/pending-write payloads restricted. Round-trip and hostile-blob tests. If engine-owned types need non-JSON, the spike fails rather than falling back to pickle or msgpack. ADR-006 §6 |
+| ATLAS-L07 | LOW | Accept | Speed benefit restated as a hypothesis. Roadmap slice **1.0**: a ≤ 3-day spike with pass/fail criteria, and reversion to the bespoke engine if it fails. ADR-001 consequences; ADR-006 §8; risk R23 |
+
+## Review LG-2 — `codex-phase0-lg2.json` — verdict `changes_required`, 3 HIGH (L01–L03 still open; L04–L07 confirmed resolved)
+
+| ID | Sev | Response | Change made |
+|---|---|---|---|
+| ATLAS-L01 | HIGH | Accept. Lookup by the current version misses a step its own completion bumped | `X_begin`/`X_run` node pair. The step ID is checkpointed in graph state before any effect, and `X_run` never re-derives it. A partial unique index allows one unfinished step per (entity, node), so overlays can't strand it. Test: completion at v+1 with checkpoint at v allocates nothing new. ADR-006 §3; database-design.md §5 |
+| ATLAS-L02 | HIGH | Accept. The fence blocked the withdrawal, and check-then-launch was racy | Dispatch reservation inserted in the **same txn** as the fence check, so fence and dispatch serialize through SQLite's single writer. Effect classes: ordinary (rejected under the fence) vs safety (`cancel_remote_merge`, reconciliation, quiesce: allowed). Settle waits for pre-fence reservations. Interleaving tests. ADR-006 §4 |
+| ATLAS-L03 | HIGH | Accept | §5.1 resolves unfinished steps before classification (complete from durable result / abandon / BLOCKED unknown). §5.2 defines compatibility over the transition history (own-step completion + recovery/user overlays only). §5.3 rebuild preconditions (no unfinished, reserved or in-flight work) and `rebuild_target`. Tests for each window. recovery-strategy.md §3 steps 13/13a |
+
+## Review LG-3 — `codex-phase0-lg3.json` — verdict `changes_required`, 2 HIGH (L01, L02 confirmed resolved)
+
+The fixes below were made after LG-3 and are **not yet independently verified**. LG-3 was the third cycle of the amendment review, so this is escalated to the user.
+
+| ID | Sev | Response | Change made |
+|---|---|---|---|
+| ATLAS-L03 | HIGH | Accept. Startup paused the phase before completing succeeded steps, which made their transitions invalid | One authoritative order: step resolution (new step 11a) **before** the PAUSED overlay (step 12), then classification (step 13). Plus overlay-aware completion: a completion committing under PAUSED/BLOCKED advances `resume_to` and leaves the overlay in place. Recovery write rule: recovery applies only own-step completions and overlays; other changes come from graph nodes consuming recorded facts. ADR-006 §3, §5; recovery-strategy.md §3; FSM PAUSED rule |
+| ATLAS-L21 | HIGH | Accept. `X_run` could reuse an abandoned step | Explicit abandoned branch in `X_run`: no effects and no completion. Routes back to `X_begin` for a fresh step only if the retry disposition and limits allow (writers: after preserve and reset), else BLOCKED(retry_not_permitted). The completion txn requires an unfinished status. Tests for read-only and writer roles |
+
+## Review LG-4 (verification-only, user-approved) — `codex-phase0-lg4.json` — verdict **`approved`**
+
+Codex: "Both findings are fully resolved at the specification level … No new CRITICAL or HIGH defect introduced by these fixes was identified. Verification covered repository specifications, not implementation or test execution."
+
+**Amendment status:** 12 findings (LG-1: 7, LG-3: 1 new, plus reopened ones). All accepted, none rejected. No open CRITICAL or HIGH. The speed benefit of LangGraph is still a hypothesis, to be proven by roadmap slice 1.0.

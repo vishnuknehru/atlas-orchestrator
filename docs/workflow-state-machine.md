@@ -110,7 +110,7 @@ Overlay states, reachable from any non-terminal phase state:
 
 | State | Meaning | Exit |
 |---|---|---|
-| `PAUSED` | User or capacity pause. `resume_to` is stored. **Pausing withdraws merge authorisation:** pausing a phase in MERGE_PENDING_REMOTE or CANCELLING_REMOTE_MERGE first completes `cancel_remote_merge` and confirms it. Only then is PAUSED entered, with `resume_to=CI_VALIDATION`. A paused phase never has a live remote merge request (ATLAS-008 r4). If the withdrawal can't be confirmed, the phase goes to BLOCKED(remote_merge_not_withdrawn) | Resume → `resume_to`, after recovery reconciliation and guard re-check |
+| `PAUSED` | User or capacity pause. `resume_to` is stored. **Pausing withdraws merge authorisation:** pausing a phase in MERGE_PENDING_REMOTE or CANCELLING_REMOTE_MERGE first completes `cancel_remote_merge` and confirms it, recording the fact "withdrawn". Only then is PAUSED entered, with `resume_to` = the current state. On resume, the waiting node consumes the recorded withdrawal and routes to CI_VALIDATION, never to MERGING. A paused phase never has a live remote merge request (ATLAS-008 r4). If the withdrawal can't be confirmed, the phase goes to BLOCKED(remote_merge_not_withdrawn) | Resume → `resume_to`, after recovery reconciliation and guard re-check |
 | `BLOCKED` | A gate cannot be satisfied. `blocked_reason` is stored | User action → a state chosen from an allowlist per reason |
 | `AWAITING_MANUAL` | A manual step is outstanding (Antigravity handoff) | Valid import |
 | `AWAITING_APPROVAL` | Human approval is required (plan, merge, waiver, protected-path change). The pending `approvals.kind` determines the only allowed exit: `protected_path`/`destructive_migration`/`secret_change` → TESTING, `merge` → MERGING | Approve (kind-specific target) or reject (→ BLOCKED or FIXING, user's choice) |
@@ -186,10 +186,22 @@ A checkpoint is written on entry to:
 - launch-handshake fields (see recovery-strategy.md §2);
 - `exit_code`, `error_class`, `error_detail`, `capacity_signal`, `correlation_id`.
 
-## 5. Tests required (Phase 1)
+## 5. Implementation on LangGraph (ADR-006)
+- The phase FSM is implemented as a LangGraph `StateGraph`, with one thread per phase. Each FSM state with work maps to a node. Waiting states (`AWAITING_MANUAL`, `AWAITING_APPROVAL`, `CI_VALIDATION` polling, `MERGE_PENDING_REMOTE`) map to `interrupt()`s that the scheduler resumes.
+- Conditional edges call the guards in §3.1. The `ALLOWED` table stays authoritative: a test asserts that every graph edge is in `ALLOWED`, and `apply_transition` rejects anything else at runtime.
+- Each effectful step is an `X_begin` / `X_run` node pair (ADR-006 §3):
+  - `X_begin` allocates or reuses the single unfinished `workflow_steps` row and checkpoints `current_step_id`.
+  - `X_run` uses that ID from graph state, never the current version. Effects are keyed by `step_id`. One transaction commits the result, outbox confirm, FSM transition and step completion.
+  - Replaying a completed step never re-applies its transition.
+- Pause and cancel use a fence that is serialized with dispatch reservations in the same SQLite transaction. Safety-class ops (`cancel_remote_merge`, reconciliation, quiesce) are allowed under the fence (ADR-006 §4).
+- `BLOCKED(effect_outcome_unknown)` exits only after the outbox op is reconciled to a known outcome.
+- `BLOCKED(engine_state_divergence)` has exactly one allowed exit: the audited, user-triggered thread rebuild (ADR-006 §5), which targets the app DB's authoritative state.
+
+## 6. Tests required (Phase 1)
 - Table-driven tests: every `(from, to)` pair not in `ALLOWED` raises an error.
 - A Hypothesis stateful test asserting that:
   - MERGED is never reached without G-TEST, G-REV, G-QA and G-CI evidence **for the same candidate as the merged head**;
   - creating a new candidate makes every earlier piece of evidence stale.
 - Concurrency: two writers race on one phase, and exactly one wins.
 - Approval staleness: an approval for candidate r1 cannot authorise a merge of r2, nor one made after a policy-version change or after expiry.
+- Graph/FSM conformance: graph edges ⊆ `ALLOWED`. Each node replayed twice after a simulated crash produces exactly one transition row and no duplicate outbox op.

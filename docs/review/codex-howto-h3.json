@@ -1,0 +1,56 @@
+{
+  "verdict": "changes_required",
+  "summary": "Most previous fixes are preserved, but the rewrite reintroduces an overbroad sandbox guarantee and leaves setup, phase-tagging, and manual-QA instructions incomplete. No CRITICAL findings identified.",
+  "findings": [
+    {
+      "id": "ATLAS-H21",
+      "severity": "MEDIUM",
+      "category": "inaccurate_security_claim",
+      "file": "docs/how-to-use.md",
+      "location": "line 213",
+      "description": "“Nothing ever runs outside the sandbox” reintroduces the blanket security guarantee corrected by H08. Developer agents run in host worktrees under a separate boundary. The narrower explanation at the end of the guide contradicts this assurance.",
+      "evidence": "docs/how-to-use.md:213 says “Nothing ever runs outside the sandbox.” docs/security-model.md:266–268 specifies a separate AgentBoundary for agent processes, and docs/risks-and-decisions.md:51 acknowledges that provider CLI processes run as the user and can read user files. The previous guide said “Nothing runs unsandboxed” specifically when the test sandbox was unavailable.",
+      "recommendation": "Say that ATLAS never runs tests or dependency setup outside the Docker sandbox, and explicitly distinguish developer agents running in host worktrees."
+    },
+    {
+      "id": "ATLAS-H22",
+      "severity": "MEDIUM",
+      "category": "incomplete_setup_instructions",
+      "file": "docs/how-to-use.md",
+      "location": "lines 81–97",
+      "description": "The preparation sequence invokes agent CLIs without installing them. A non-developer following Step 2 on a clean computer will encounter command-not-found errors at Step 3. Antigravity installation and sign-in are also absent, although setup A requires it later.",
+      "evidence": "docs/how-to-use.md:75 installs infrastructure tools but no agent CLIs. Lines 92–93 immediately invoke claude and codex login; line 97 requires those CLIs to start successfully. Line 360 later requires the user to start Antigravity.",
+      "recommendation": "Add installation links and explicit installation and sign-in steps for the chosen agent tools before invoking them. Give local-model users equivalent server installation and verification instructions."
+    },
+    {
+      "id": "ATLAS-H23",
+      "severity": "MEDIUM",
+      "category": "unavailable_today_instruction",
+      "file": "docs/how-to-use.md",
+      "location": "line 120",
+      "description": "The step tagged today says users can verify permissions with a named script, but that script is absent from the repository and no download location or invocation is supplied. This preparation step cannot be completed as written.",
+      "evidence": "docs/how-to-use.md:100 tags Step 4 today, and line 120 says permissions can be checked “at any time” with verify-github-pat.sh. Repository file enumeration contains no such script. docs/risks-and-decisions.md:45 references the script but marks permission verification pending; docs/github-integration.md:86 describes future verification logic.",
+      "recommendation": "Remove the claim that this check is available today, or identify an existing script location and provide a safe, runnable invocation."
+    },
+    {
+      "id": "ATLAS-H24",
+      "severity": "MEDIUM",
+      "category": "phase_mismatch",
+      "file": "docs/how-to-use.md",
+      "location": "lines 304–322",
+      "description": "The P2–P5 availability range does not identify which steps actually become available in which phase. It suggests implementation and delivery capabilities begin in P2, although P2 only integrates agents. This defeats the guide's promise that availability tags identify the phase delivering each capability.",
+      "evidence": "docs/how-to-use.md:305 tags the entire phase walkthrough P2–P5, including worktree preparation, implementation, tests, review, push, PR and merge. docs/implementation-roadmap.md:65–85 assigns the local implementation and verification pipeline to P4; lines 87–90 assign GitHub delivery to P5.",
+      "recommendation": "Tag the walkthrough P4 local workflow and P5 GitHub delivery, and label the corresponding table rows or split the table into those two groups."
+    },
+    {
+      "id": "ATLAS-H25",
+      "severity": "MEDIUM",
+      "category": "unclear_manual_step",
+      "file": "docs/how-to-use.md",
+      "location": "lines 355–364",
+      "description": "The instructions change into the QA worktree, then tell users to save a relative result.json, but the import command reads result.json from the handoff directory. Following the sequence literally creates the result in the wrong directory. PROMPT.md is likewise in the packet directory rather than the current worktree.",
+      "evidence": "docs/how-to-use.md:355 opens the packet directory, lines 356–359 change into the QA worktree, line 361 says to save result.json without a destination, and line 364 imports from ~/.atlas/handoffs/<project>/<execution>/result.json. docs/antigravity-manual-handoff.md:26–39 explicitly places PROMPT.md and the user-created result.json in the handoff directory.",
+      "recommendation": "Specify the full packet-directory paths for both PROMPT.md and result.json, or define a packet-path variable before changing directories and use it consistently."
+    }
+  ]
+}

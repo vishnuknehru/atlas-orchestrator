@@ -21,9 +21,9 @@ Phase 6 adds only auto-resume, capacity scheduling and the full fault-injection 
 | Slice | Content | Tests |
 |---|---|---|
 | **1.0** | **LangGraph integration spike, ≤ 3 working days, throwaway branch** (ADR-006 §8). Proves on pinned versions: §3 crash-window tests, §4 pause protocol, §5 thread classification and rebuild, §6 `StrictJsonSerializer` round-trip + hostile-blob rejection, zero egress. Records the actual effort | **Pass → continue with LangGraph. Fail → revert to the bespoke engine** behind the same `WorkflowEngine` interface. The result is recorded as an ADR-006 amendment and shown to the user |
-| 1.1 | Scaffold: `backend/` (uv, FastAPI, ruff, mypy, pytest), `frontend/` (Vite React TS Tailwind, Vitest), GitHub Actions CI (lint, type, test, pip-audit, npm audit), `atlas serve` | CI green; `/healthz` |
+| 1.1 | Scaffold: `backend/` (uv, FastAPI, ruff, mypy, pytest), `frontend/` (Vite React TS Tailwind, Vitest), GitHub Actions CI on **macOS and Linux** runners (lint, type, test, pip-audit, npm audit), `atlas serve` | CI green on both OSes; `/healthz` |
 | 1.2 | DB: models + Alembic baseline (projects with unique repo, tasks, plans, phases, candidates, transitions, audit_log, approvals, repo_locks); composite ownership FKs; WAL pragmas; single writer; backups | Migrations; pragma asserts; append-only triggers; **cross-project FK negative tests** |
-| 1.3 | Config: Pydantic schemas, layering, safe defaults, unsafe values rejected, `policy_version` bump on change | Merge property tests; unsafe values rejected |
+| 1.3 | Config: Pydantic schemas, layering, safe defaults, unsafe values rejected, `policy_version` bump on change. Includes the **agent registry** (`agents.yaml`, ADR-007 §2): roles reference registry ids; `billing`, `model_family`, loopback-only `endpoint`; `SecretStore` interface (Keychain / Secret Service) | Merge property tests; unsafe values rejected; role → registry resolution; ADR-005 independence over example profiles A and B; non-loopback endpoint rejected without opt-in |
 | 1.4 | FSM + policy engine: transition tables, `apply_transition` txn, guards as pure functions bound to candidate IDs; repo lock acquire/release | Invalid-transition table; Hypothesis stateful (no MERGED without same-candidate evidence); concurrent writers; **repo lock exclusivity** |
 | 1.4b | **LangGraph engine (ADR-006):**<br>• pinned patched versions, `WorkflowEngine` interface, `StrictJsonSerializer`, `durability="sync"`, tracing forced off<br>• `workflow_steps` step-completion contract<br>• pause fence protocol<br>• **startup thread classification + audited rebuild** (ships here, not in Phase 6)<br>• quiesced paired backups<br><br>Production graphs contain only **real** nodes for capabilities that exist. Nodes for unbuilt capabilities (agents, tests, GitHub) are **fail-closed placeholders**: they raise `CapabilityUnavailable` → `BLOCKED(capability_unavailable)`. **No-op nodes exist only in the test suite** | Graph edges ⊆ `ALLOWED`; crash-window tests (ADR-006 §3.5); pause tests; classification tests (consistent / app-ahead / paused overlay / incompatible); rebuild; restart → user Resume; zero egress; `pip-audit` clean |
 | 1.5 | API: projects (register record + `gh repo view` check, no clone yet), tasks CRUD, pause/resume/cancel, SSE; localhost bind, Host allowlist, session token, CSRF | API tests incl. CSRF/Host negatives |
@@ -38,10 +38,11 @@ Phase 6 adds only auto-resume, capacity scheduling and the full fault-injection 
   - Claude: `--setting-sources user` vs project CLAUDE.md/skills; usage-limit result shape; auth probe; OS sandbox via settings.
   - Codex: `--ignore-user-config` + `-c` pins and the effective config; read scope of sandboxed commands; `workspace-write` network; limit/auth failure signatures.
   - Use tiny prompts to save quota.
-- 2.1 `atlas-exec` launcher + supervisor: durable launch handshake, run files, process groups, quiesce protocol, timeouts, artefacts, redaction, env scrub. Also the **outer Seatbelt wrapper for agent processes**, which denies `~/.colima`, `~/.docker`, `~/.atlas` and Docker sockets. Spike test: an agent command can't reach the Docker socket; shell-capable roles are BLOCKED if the wrapper fails (security-model.md §5.1.9).
+- 2.0b **Linux and local-model spike items** (ADR-007): bubblewrap/Landlock `AgentBoundary` with the same Docker-socket test; Codex `--oss` effective config and endpoint; one OpenAI-compatible server (Ollama) structured-output behaviour; `credential_isolation` for `claude_cli` and `codex_cli` (does an agent-launched `env` show an injected key?).
+- 2.1 `atlas-exec` launcher + supervisor: durable launch handshake, run files, process groups, quiesce protocol, timeouts, artefacts, redaction, env scrub (with the per-agent API-key exception, D15). Also the **outer `AgentBoundary` wrapper for agent processes** (Seatbelt on macOS, bubblewrap on Linux), which denies `~/.colima`, `~/.docker`, `~/.atlas` and Docker sockets. Spike test: an agent command can't reach the Docker socket; shell-capable roles are BLOCKED if the wrapper fails (security-model.md §5.1.9).
 - 2.2 Blob store + `artifact_refs` + `executions`.
-- 2.3 `AgentAdapter` protocol, `FakeAdapter` fixture replay, capability probe (version + help hash + required flags).
-- 2.4 `ClaudeAdapter`, `CodexAdapter`, and `ManualHandoffAdapter` (packet + import validation, criteria completeness).
+- 2.3 `AgentAdapter` protocol, **manifest-driven generic `cli` adapter** (ADR-007 §3; only verified manifests load), exact-value secret redaction, `FakeAdapter` fixture replay, capability probe (version + help hash + required flags).
+- 2.4 Built-in manifests `claude_cli` and `codex_cli`, `ManualHandoffAdapter` (packet + import validation, criteria completeness), and `OpenAICompatibleHttpAdapter` for read-only roles (loopback check after DNS resolution, schema-validated reply, no tools).
 - 2.5 Capacity manager + Agent Status screen.
 
 **Tests:**
@@ -51,7 +52,7 @@ Phase 6 adds only auto-resume, capacity scheduling and the full fault-injection 
 - env-scrub;
 - crash between launch and run-file.
 
-**Acceptance:** real auth and capacity are shown for Claude and Codex, and `MANUAL_ONLY` for Antigravity. A read-only "hello" execution per headless agent is recorded.
+**Acceptance:** real auth and capacity are shown for Claude and Codex, and `MANUAL_ONLY` for Antigravity. A read-only "hello" execution per headless agent is recorded, including one local-model review through `openai_compatible_http`. A user-added manifest is refused. An API-key CLI agent without `credential_isolation: verified` is `BLOCKED(api_key_not_isolated)`.
 
 ## Phase 3 — Planning & challenge
 - Repository analysis (deterministic scan, then a read-only Claude summary), plan schema with criterion IDs, DAG validation, plan revisions.
@@ -70,16 +71,16 @@ Phase 6 adds only auto-resume, capacity scheduling and the full fault-injection 
   - daemon-side lifecycle/recovery;
   - the dependency egress proxy.
 
-  The **reserved APFS volume** for the Colima VM (one-time admin step by the user) and per-execution fixed-size loop filesystems are also part of this slice.
+  The **reserved disk** for the Colima VM (one-time admin step by the user: an APFS volume on macOS, a partition or LVM volume on Linux) and per-execution fixed-size loop filesystems are also part of this slice. The sandbox self-test runs on both OSes.
 
   G-TEST is impossible without it. macOS-toolchain projects, source-mutating tests, submodules and LFS stay BLOCKED.
 - Code review on the candidate diff; repair loop; fix verification by an independent reviewer.
-- **Minimum QA gate:** Antigravity handoff for the candidate with a dedicated QA worktree, import, criteria completeness and verdict consistency. No reassignment path (D4). Without a valid QA result or waiver, the phase cannot reach READY_FOR_DELIVERY.
+- **Minimum QA gate (provider-neutral, ADR-007):** QA by the configured QA agent. With the recommended profile, that is an Antigravity manual handoff; any `manual_handoff` agent works the same way. It uses a dedicated QA worktree, import, criteria completeness and verdict consistency. No reassignment path (D4). Without a valid QA result or waiver, the phase cannot reach READY_FOR_DELIVERY.
 
 **Acceptance:** on a local fixture repo, one phase reaches READY_FOR_DELIVERY with these, all bound to one candidate:
 - tests `executed` inside the sandbox;
 - an independent review;
-- an imported QA result.
+- an imported QA result (from the configured QA agent).
 
 A new fix makes the earlier evidence stale. A failing test triggers a bounded repair loop and then BLOCKED. The sandbox self-test shows that `~/.atlas` and `~/.ssh` are unreadable from tests.
 
@@ -108,7 +109,7 @@ A new fix makes the earlier evidence stale. A failing test triggers a bounded re
 - Execution timeline, diff viewer, findings dashboards, approvals inbox, recovery controls, GitHub status, audit history, redacted diagnostics export, notifications, final task report.
 
 ## Phase 10 — Hardening
-- Security test suite (security-model.md §6), provider/GitHub failure simulation, install script, `launchd` agent, backup/restore docs, optional dedicated-user setup.
+- Security test suite (security-model.md §6), provider/GitHub failure simulation, install script for macOS and Linux, `launchd` agent / `systemd --user` unit, `atlas agents add|test|list` and `atlas secrets set`, backup/restore docs, optional dedicated-user setup.
 - An end-to-end Definition-of-Done run on a sandbox repo, recorded in `docs/evidence/e2e-<date>.md`.
 
 ## Definition-of-Done tracking

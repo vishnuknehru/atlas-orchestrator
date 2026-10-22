@@ -6,7 +6,7 @@ This matrix holds three kinds of statement:
 - **Inferred**: a reasoned conclusion.
 - **To verify**: must be confirmed by a Phase 2 spike before the adapter relies on it.
 
-ATLAS re-probes versions and flags at startup (§5), because these CLIs update themselves. `agy` moved from 1.4.2 to 1.4.5 *during* this Phase 0 session.
+This report covers the three **built-in, verified** adapter manifests (ADR-007 §3). Other agents are added through the registry and manifest process in §6. ATLAS re-probes versions and flags at startup (§5), because these CLIs update themselves. `agy` moved from 1.4.2 to 1.4.5 *during* this Phase 0 session.
 
 ## 1. Summary matrix
 
@@ -22,7 +22,7 @@ ATLAS re-probes versions and flags at startup (§5), because these CLIs update t
 | `resume` | ✅ `--session-id`, `--resume <id>` [H] | ✅ `codex exec resume <id>` [help] | n/a |
 | `capacity_signal` | ✅ `system/api_retry` events with `error` ∈ {`rate_limit`, `authentication_failed`, `billing_error`, `overloaded`, …} in stream-json [H] | ⚠️ undocumented for exec; classify from exit code + stderr (to verify) | n/a |
 | `supported_subscription_auth` | ✅ for the user's own use of the unmodified binary [L] | ✅ "advanced" path for trusted runners; not for public/OSS repos [N] | ✅ for the user's own interactive use |
-| `supported_third_party_orchestration` | ⚠️ Personal-use only. Not offered to others; no credential handling [L] | ⚠️ Trusted local runner, private repos [N] | ❌ **Treated as not permitted.** Terms §6 [T] |
+| `supported_third_party_orchestration` | ⚠️ Each operator runs their own copy with their own login (self-hosted, single-operator; ADR-007 §1). Never offered as a service to others; no credential handling [L] | ⚠️ Trusted local runner, private repos [N] | ❌ **Treated as not permitted.** Terms §6 [T] |
 | **ATLAS integration mode** | `headless` | `headless` (private repos) / `blocked` (public repos; no override in this release, D5) | `manual_handoff` |
 
 Sources:
@@ -128,7 +128,17 @@ Never passed:
 - `--dangerously-bypass-approvals-and-sandbox`
 - `--dangerously-bypass-hook-trust`
 - `-s danger-full-access`
-- `--oss`
+- `--oss` / `--local-provider` **for agents with `billing: subscription` or `api_key`**
+
+Per-billing Codex policy (ADR-007):
+
+| Billing | `--oss` | Auth | Public repos (D5) |
+|---|---|---|---|
+| `subscription` | never | ChatGPT sign-in managed by the CLI | blocked |
+| `api_key` | never | key only after `credential_isolation: verified` (Phase 2 spike); until then `BLOCKED(api_key_not_isolated)` | blocked |
+| `local` | **required**, with `--local-provider` and the endpoint pinned; loopback checked before launch | none | blocked (D5 unchanged; narrowing it needs a new decision) |
+
+Each billing mode has its own hostile-config fixture.
 
 To verify in the Phase 2 spike:
 - Whether project `AGENTS.md` and `.codex/config.toml` in the worktree are loaded. If so, they are treated as prompt content and must not be able to change sandbox or approvals.
@@ -174,7 +184,10 @@ Full runbook: [antigravity-manual-handoff.md](antigravity-manual-handoff.md).
 
 ```python
 class AgentAdapter(Protocol):
-    provider: Provider                       # claude | codex | antigravity
+    agent_id: str                            # registry id from ~/.atlas/agents.yaml (ADR-007 §2)
+    adapter_kind: AdapterKind                # cli | openai_compatible_http | manual_handoff
+    manifest: AdapterManifest | None         # for cli: argv templates, parser, failure fixtures, probes
+    provider: str                            # derived inference provider: anthropic | openai | google | local | <remote host>
     async def check_availability(self) -> AvailabilityReport      # binary present, version, capacity state
     async def check_authentication(self) -> AuthStatus            # cheap, no model call where possible
     async def get_capabilities(self) -> Capabilities              # from this file, version-gated
@@ -183,8 +196,38 @@ class AgentAdapter(Protocol):
     async def collect_result(self, execution_id: str) -> ExecutionResult  # typed; includes evidence label
 ```
 
-**Startup capability probe.** For each provider, ATLAS records `--version` and hashes the `--help` output. If a flag used by a template is missing from the new help text, the adapter goes to `PROVIDER_UNAVAILABLE(reason=cli_incompatible)`. ATLAS does not guess at the change.
+**Startup capability probe.** For each `cli` agent, ATLAS records `--version` and hashes the `--help` output. If a flag used by a template is missing from the new help text, the adapter goes to `PROVIDER_UNAVAILABLE(reason=cli_incompatible)`. ATLAS does not guess at the change.
 
 **Version pinning.** Config may state a `min_version` and a `max_tested_version`. If the installed version is above `max_tested_version`, ATLAS shows a warning badge. Strict mode blocks the adapter until the fixture tests pass.
 
 Tests use `FakeAdapter` implementations that replay recorded fixtures: success, malformed JSON, timeout, crash, rate_limit, auth_expired.
+
+## 6. Adding other agents and local models (ADR-007)
+
+### 6.1 Adapter manifest (for `cli` agents)
+A manifest is data that the generic `cli` adapter reads. It cannot add code. Fields:
+
+| Field | Purpose |
+|---|---|
+| `binary`, `version_cmd`, `min_version`, `max_tested_version` | Capability probe (§5) |
+| `roles` | Roles the manifest supports. Each maps to an argv template (no shell; placeholders such as `{worktree}`, `{schema_path}`, `{prompt_file}`, `{model}` filled with allowlisted values) |
+| `required_flags` | Flags that must appear in `--help`; missing → `PROVIDER_UNAVAILABLE(cli_incompatible)` |
+| `isolation_flags` | Flags that stop repo/user config from loading hooks, MCP servers or providers. Each needs a hostile-config fixture |
+| `output` | `stream-json` \| `jsonl-events` \| `final-json-file`, plus the JSON path of the structured result |
+| `failure_patterns` | Exit-code/stderr regex → capacity state, in a versioned fixtures file |
+| `auth_probe` | Cheapest command that reports login state without a model call where possible |
+| `env` | Extra non-secret vars and, for `billing: api_key`, the one variable that receives the agent's key |
+| `credential_isolation` | `verified` only if a fixture proves agent-launched commands don't inherit the key; required for `billing: api_key` |
+| `redaction_patterns` | Extra token formats to redact |
+
+Only `verified` manifests load. A user-added manifest is refused. A manifest becomes `verified` only through a reviewed ATLAS PR that adds recorded fixtures (success, malformed output, timeout, crash, rate limit, auth expired) and passes the hostile-repo and hostile-config tests. Each new CLI also needs a terms check like the one in §2–§4 before it ships as `verified`.
+
+### 6.2 Local and open-weight models
+- **Write roles:** use an agent CLI that can drive a local model. Two examples are Codex with `--oss --local-provider ollama|lmstudio` (flags verified in `evidence/codex-exec-help.txt`; effective config, model selection and endpoint override to verify in Phase 2) and OpenCode (a candidate manifest). The Codex public-repo block (D5) applies to every Codex agent, whatever its billing (§3.2 table).
+- **Read-only roles:** `openai_compatible_http` sends one `POST /v1/chat/completions` request.
+  - The request asks for a structured output (`response_format: json_schema`). If the server doesn't support that, ATLAS uses JSON mode and validates the reply strictly.
+  - No `tools` or functions are sent.
+  - Timeouts and HTTP 429/5xx map to capacity states, and an endpoint that can't be reached maps to `PROVIDER_UNAVAILABLE`.
+  - Servers with this API include Ollama, LM Studio, vLLM and llama.cpp `llama-server`.
+- Endpoints must be loopback unless the agent has `allow_remote_endpoint: true` (ADR-007 §4).
+- The model family comes from ADR-005's map, or else from the declared `model_family`.

@@ -6,11 +6,12 @@ Status: Phase 0 draft · 2026-10-22
 
 | Asset | Where | Impact if compromised |
 |---|---|---|
-| GitHub credentials (the user's PAT per project in Keychain, D3; the gh keyring token exists but ATLAS never uses it) | macOS keychain | Push/merge to any repo the token can reach |
-| Provider sessions (`~/.claude`, `~/.codex/auth.json`, Antigravity) | Provider-managed | Account abuse, suspension |
+| GitHub credentials (the user's PAT per project, D3; the gh keyring token exists but ATLAS never uses it) | OS secret store (macOS Keychain / Linux Secret Service; ADR-007 §6) | Push/merge to any repo the token can reach |
+| Provider sessions (`~/.claude`, `~/.codex/auth.json`, Antigravity, other CLIs) | Provider-managed | Account abuse, suspension |
+| Agent API keys (only for agents set to `billing: api_key`, D15) | OS secret store, `atlas.agent.<agent_id>` | Paid API abuse on the user's account |
 | Source code of registered projects | Clones and worktrees | IP leak, supply-chain injection |
 | ATLAS DB, artifacts, logs | `~/.atlas` | History tampering, false "verified" claims |
-| Host machine | macOS user account | Arbitrary code execution as the user |
+| Host machine | The user's macOS or Linux account | Arbitrary code execution as the user |
 
 ## 2. Actors and trust
 
@@ -18,7 +19,9 @@ Status: Phase 0 draft · 2026-10-22
 |---|---|
 | The user (local, authenticated to the dashboard) | Trusted |
 | ATLAS core code | Trusted (reviewed, tested) |
-| Provider CLI binaries as published | Trusted to behave as documented |
+| Agent CLI binaries with a `verified` manifest, as published | Trusted to behave as documented |
+| User-added agent manifests | Not loaded in this release (ADR-007 §3) |
+| Local model servers (Ollama, LM Studio, vLLM, …) | Trusted only to return text; their output is untrusted data |
 | **Agent output** (text, JSON, diffs, commands they ran) | **Untrusted data** |
 | **Repository content** (code, docs, `AGENTS.md`, `CLAUDE.md`, `.claude/`, `.codex/`, `.mcp.json`, CI config, issues, PR comments, CI logs) | **Untrusted** |
 | GitHub API responses | Trusted for state, untrusted for free text |
@@ -42,7 +45,7 @@ Controls:
 
 Controls:
 - Claude invocations always pass `--setting-sources user`, `--settings '{"disableAllHooks": true}'`, `--strict-mcp-config --mcp-config '{"mcpServers":{}}'`. Phase 2 adds a fixture test with a hostile repo, asserting that its hook marker file is never created.
-- Codex invocations pass `--ignore-user-config`, which still keeps CLI-managed authentication according to `evidence/codex-exec-help.txt`, and `--ignore-rules`. Every setting ATLAS depends on is pinned explicitly with `-c`: model, sandbox, approval policy, and **no MCP servers or other providers**. The user's personal `~/.codex/config.toml` therefore cannot add providers, MCP integrations or relaxed sandboxing to ATLAS runs (ATLAS-006). They never pass `--dangerously-bypass-hook-trust`. Phase 2 hostile-config tests verify the *effective* configuration: a user config with an MCP server and a project `.codex/config.toml` must both be ignored.
+- Codex invocations pass `--ignore-user-config`, which still keeps CLI-managed authentication according to `evidence/codex-exec-help.txt`, and `--ignore-rules`. Every setting ATLAS depends on is pinned explicitly with `-c`: model, sandbox, approval policy, and **no MCP servers and no providers other than the configured one**. For `billing: subscription` and `api_key` that means no model provider override at all. For `billing: local` it means exactly the configured `--local-provider` and loopback endpoint, and nothing from user or project config (agent-compatibility.md §3.2). The user's personal `~/.codex/config.toml` therefore cannot add providers, MCP integrations or relaxed sandboxing to ATLAS runs (ATLAS-006). They never pass `--dangerously-bypass-hook-trust`. Phase 2 hostile-config tests verify the *effective* configuration for each billing mode. A user config with an MCP server or an extra model provider, and a project `.codex/config.toml`, must both be ignored. A local agent must end up with only its configured provider and endpoint.
 - **Test commands come from ATLAS project config, which the user approves, never from the repo or from agents.** Running a project's tests still executes repository code. That is why tests run only inside the enforced `test-sandbox` (§5.1), and ATLAS fails closed if the sandbox is unavailable.
 - Git hooks: ATLAS runs its own git operations with `-c core.hooksPath=/dev/null` so repository-provided hooks (via `core.hooksPath`) don't run during ATLAS commits. Pre-commit checks the project wants are run explicitly as configured test commands.
 
@@ -50,10 +53,14 @@ Controls:
 Controls:
 - **Environment scrubbing.** Agent, test and git subprocesses get an allowlisted env (`PATH`, `HOME`, `LANG`, `TERM`, `TMPDIR` set per execution, plus project-declared non-secret vars). `GH_TOKEN`, `GITHUB_TOKEN`, `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `AWS_*` and anything matching `*TOKEN*|*SECRET*|*KEY*|*PASSWORD*` are explicitly removed.
   - `ANTHROPIC_API_KEY` must be absent so that Claude Code never silently switches billing to an API key. This is the "no silent billing change" requirement.
+  - **Single exception (D15, ADR-007 §5):** an agent configured with `billing: api_key` gets its own key.
+    - For HTTP agents, the key goes only in a request header.
+    - For a CLI agent, it goes in the one variable its manifest names, and only if the manifest has `credential_isolation: verified`, which a fixture test proves: commands the agent launches must not inherit the key. Without that, the agent is `BLOCKED(api_key_not_isolated)`.
+    - The env-scrub test asserts the key is absent from every other agent, every test, git and gh process, and every agent-launched command.
 - **gh is used only by the GitHub service**, never inside an agent process. Agents get no `Bash(gh *)` permission. Codex `workspace-write` network policy is to be verified (see agent-compatibility.md).
 - **ATLAS never reads** `~/.claude*`, `~/.codex/auth.json` or Antigravity storage, and never stores provider tokens.
 - **Least-privilege GitHub token** (decision D3: the user's PAT, verified before use). Use a fine-grained PAT per project, limited to that single repository, with permissions contents:write, pull_requests:write, checks:read and actions:read. Store it in Keychain and pass it to `gh` via `GH_TOKEN` only in the GitHub service's subprocess env. The default gh `gho_` token has broad `repo` + `workflow` scope across all repos.
-- **Redaction.** A log/artefact writer redacts known token patterns (`gh[opsu]_…`, `sk-…`, `AIza…`, JWTs, PEM blocks) before persisting. Artefacts are written with mode 0600 and `~/.atlas` with 0700.
+- **Redaction.** Every secret ATLAS loads is registered with the redactor before use and removed by **exact value** (ADR-007 §5). In addition, a log/artefact writer redacts known token patterns (`gh[opsu]_…`, `sk-…`, `AIza…`, JWTs, PEM blocks) before persisting. Artefacts are written with mode 0600 and `~/.atlas` with 0700.
 
 ### 3.4 Command / argument injection (Tampering)
 *Context:* branch names, file paths and PR titles derived from tasks or agents. There is a reported Codex bug class in which malicious branch names injected commands in task setup.
@@ -94,6 +101,19 @@ Controls:
 - **No egress:** LangSmith/LangChain tracing variables are forced off, and no Platform, Studio or SDK client is used. A test asserts zero outbound connections during a fake end-to-end run.
 - **Authority:** graph routing calls the policy engine. Agent output is stored data and never selects an edge (§3.1 control 1 still holds).
 
+### 3.11 User-configured agents and local endpoints (ADR-007)
+*Scenarios:* a user-added manifest launches a tool that ignores isolation flags or writes outside its worktree. A local model endpoint is actually remote and receives source code. A model's family is mislabelled so that a model reviews its own family's work.
+
+Controls:
+- **No free-form commands.** Manifests are data: an argv template with no shell and allowlisted placeholders. The generic `cli` adapter enforces the same supervisor, env scrub, `AgentBoundary` wrapper and structured-output validation as the built-in adapters.
+- **Only verified manifests load.** A user-added manifest is refused, because a role assignment can't make an unfamiliar CLI read-only. Adding a manifest takes a reviewed ATLAS PR with fixture and hostile-config tests.
+- **Loopback by default.** ATLAS rejects an `openai_compatible_http` endpoint that resolves to anything but loopback or a Unix socket, unless the agent has `allow_remote_endpoint: true`.
+  - The client connects to the **validated address itself**, so a second DNS lookup can't redirect it.
+  - It ignores proxy environment variables, rejects redirects, and re-validates on every request.
+  - For local CLI providers, the configured endpoint is checked before launch and pinned on the command line (ADR-007 §4). If remote is allowed, the dashboard shows that code leaves the machine. The HTTP adapter sends no tools, so a model can only return text.
+- **Family can't be lowered.** A declared `model_family` can't override the built-in map, and an unknown family blocks independence (ADR-005).
+- **Agent config isn't repo-controlled.** `agents.yaml` changes only through the dashboard or CLI and is recorded in `audit_log`. Repository content can't add or change agents.
+
 ### 3.9 Supply chain (ATLAS's own deps)
 - Python deps via `uv lock` (hashes). Frontend via `package-lock.json` with `npm ci`.
 - `pip-audit` and `npm audit --audit-level=high` in CI. Dependabot/Renovate on the ATLAS repo.
@@ -114,10 +134,12 @@ Controls:
 
 ## 5. Execution boundaries (revised after Codex finding ATLAS-005)
 
-Environment scrubbing and cwd do **not** isolate credentials, because repository code running as your macOS user can read your whole home directory. Acknowledging "trusted repositories only" is a *limitation*, not a control. ATLAS therefore requires an **enforced boundary** before it executes repository code, and fails closed without one.
+Environment scrubbing and cwd do **not** isolate credentials, because repository code running as your OS user can read your whole home directory. Acknowledging "trusted repositories only" is a *limitation*, not a control. ATLAS therefore requires an **enforced boundary** before it executes repository code, and fails closed without one.
 
 ### 5.1 ATLAS-run test commands: the Docker `test-sandbox` (Phase 4 prerequisite; decision D11; revised after Codex review D1)
-Tests run in **Linux containers on Colima**, a Docker-compatible runtime in a Lima VM (MIT licence). Repository code never runs on the macOS host.
+Tests run in **Linux containers on Colima**, a Docker-compatible runtime in a Lima VM (MIT licence). Repository code never runs on the host.
+
+**Platforms (D13, ADR-007 §6).** The same design applies on macOS (`vz` or QEMU) and on Linux (QEMU + KVM). The VM boundary, the no-host-mounts rule, the explicit socket and every check below are identical. Only the reserved-disk mechanism differs (§5.1.8). Running Docker natively on a Linux host is not an accepted sandbox.
 
 #### 5.1.1 Runtime and VM
 - **Dedicated profile** `colima --profile atlas`. ATLAS always addresses it through the explicit endpoint `unix://~/.colima/atlas/docker.sock`. It never uses `DOCKER_HOST`, the current Docker context, or another daemon.
@@ -233,13 +255,15 @@ Repository code never runs as part of the self-test.
   2. Colima's data path resolves onto that volume;
   3. the execution's preallocation fits in the VM.
 
+  **On Linux (D13)** the equivalent is a dedicated partition or a **fully allocated (thick)** LVM logical volume, mounted at the Colima/Lima data path. Thin-provisioned LVs, sparse files and loop images share or defer their backing storage, so they are rejected. For check 1, ATLAS inspects the backing device (`findmnt`, `lsblk`, `lvs -o lv_layout,pool_lv`) and requires a partition or a linear/striped LV with no pool. Exact steps are confirmed in Phase 4.
+
   Otherwise: `BLOCKED(no_reserved_sandbox_storage)`. ATLAS's own data (`~/.atlas`, the DBs) is **not** on that volume, so sandbox growth can't touch it.
 - **Host volume exhaustion by other processes** (outside ATLAS's control) is detected, not prevented. If free space on the volume holding `~/.atlas` falls below 5 GB, the scheduler stops admitting work, in-flight executions are quiesced, and every project shows `BLOCKED(host_disk_low)` until space is freed. This is a separate path from guest `ENOSPC`. SQLite durability (`synchronous=FULL`) means a failed write aborts its transaction rather than corrupting state.
 - **VM disk full anyway** (e.g. image pulls). ATLAS stops scheduling test executions, quiesces running ones (§5.1.7), removes `atlas.*`-labelled stopped containers, volumes and loop images, and re-checks. If space is still short, every project goes to `BLOCKED(sandbox_disk_full)`, and the UI shows the cleanup steps.
 
 #### 5.1.9 Who can reach Docker (ATLAS-D05)
 Hiding the socket isn't enough, because any process running as the user can connect to a user-owned Unix socket. So:
-- **Agent processes run inside an ATLAS outer Seatbelt wrapper** (`sandbox-exec`; this is unrelated to the test sandbox). It denies file access to `~/.colima`, `~/.docker`, `~/.atlas` (except the agent's own worktree) and `/var/run/docker.sock`, and denies `network-outbound` to Unix sockets under those paths.
+- **Agent processes run inside an ATLAS outer `AgentBoundary` wrapper** (unrelated to the test sandbox). On macOS it is Seatbelt (`sandbox-exec`). On Linux it is bubblewrap, plus Landlock where available. Linux is a Phase 2 spike item with the same pass/fail test. It denies file access to `~/.colima`, `~/.docker`, `~/.atlas` (except the agent's own worktree) and `/var/run/docker.sock`, and denies `network-outbound` to Unix sockets under those paths.
 - **Phase 2 spike obligation:** the Claude and Codex CLIs must work under this wrapper. They need network access to their providers and their own config and auth directories. The spike adds a test where an agent-launched command tries `curl --unix-socket ~/.colima/atlas/docker.sock` and must fail.
 - **If the CLIs can't run under the wrapper,** agent roles that can execute shell commands (Codex `workspace-write`, Claude with Bash) are `BLOCKED(no_agent_boundary)` until a separate runner identity design is approved. Read-only roles with no shell continue.
 - The test sandbox containers have no socket (§5.1.4).

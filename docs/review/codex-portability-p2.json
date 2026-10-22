@@ -1,0 +1,56 @@
+{
+  "verdict": "changes_required",
+  "summary": "Resolved: ATLAS-P01, P02, P03, P04, P06 and P07. Unresolved: ATLAS-P05, P08 and P09. Two new MEDIUM issues are reported below. This is a design review; no files were modified.",
+  "findings": [
+    {
+      "id": "ATLAS-P05",
+      "severity": "MEDIUM",
+      "category": "review_independence",
+      "file": "docs/adr/ADR-007-portable-pluggable-providers.md",
+      "location": "lines 60–63",
+      "description": "Provider identity is now separate from registry identity, but remote endpoint hostnames still substitute for inference-provider identity. Two hostnames operated by the same provider can satisfy provider inequality, contrary to the stated alias protection. The precedence between local billing and a remote endpoint is also unspecified.",
+      "evidence": "ADR-007:62 derives provider 'local' from billing, while line 63 derives it from a remote endpoint host. ADR-005:22 promises that two aliases for the same hosted provider never satisfy the provider check. Different endpoint hosts do not establish different operators.",
+      "recommendation": "Define unambiguous derivation precedence and canonical inference-provider identity for remote endpoints. Reserve the local exception for validated local destinations; fail closed when remote provider identity cannot be established."
+    },
+    {
+      "id": "ATLAS-P08",
+      "severity": "MEDIUM",
+      "category": "provider_terms",
+      "file": "docs/adr/ADR-004-cli-subprocess-adapters.md",
+      "location": "line 12",
+      "description": "The dated evidence and end-user subscription permission correct the earlier quotation dispute, but the distribution assessment still treats product-integration conditions as relevant only to hosted ATLAS. The cited conditions also cover running Claude Code in products or other agent infrastructure. The design does not assess whether distributed self-hosted ATLAS falls within that scope.",
+      "evidence": "ADR-004:12 concludes that self-hosted ATLAS is the permitted end-user case, then assigns Commercial Terms conditions to 'A hosted ATLAS'. docs/evidence/claude-legal-compliance-2026-10-22.md:9–11 captures the broader product-integration scope and unrestricted-authentication condition. The current [official page](https://code.claude.com/docs/en/legal-and-compliance) retains those conditions.",
+      "recommendation": "Assess the distributed self-hosted integration against the product-integration conditions, including authentication restrictions, and record any unresolved applicability question. Keep the hosted-service non-goal unchanged."
+    },
+    {
+      "id": "ATLAS-P09",
+      "severity": "MEDIUM",
+      "category": "qa_scope_contradiction",
+      "file": "docs/how-to-use.md",
+      "location": "lines 225–235",
+      "description": "The roadmap and architecture now permit generic QA, but the operative import instructions still require Gemini. Following these instructions rejects the advertised fully local profile's non-Gemini QA result even when it satisfies independence.",
+      "evidence": "how-to-use.md:119 permits manual QA with a non-Qwen model, but lines 228 and 235 require selecting and validating Gemini. ADR-007:136 and implementation-roadmap.md:78 say any configured manual-handoff QA agent works.",
+      "recommendation": "Define a provider-neutral manual-handoff import contract and validate the configured model and ADR-005 independence. Scope Gemini-specific instructions explicitly to the recommended Antigravity profile."
+    },
+    {
+      "id": "ATLAS-P11",
+      "severity": "MEDIUM",
+      "category": "persistence_contract",
+      "file": "docs/database-design.md",
+      "location": "lines 124–144 and 177–185",
+      "description": "The persistence design cannot preserve the new provider and declared-family identities independently of mutable registry configuration. Historical independence decisions become ambiguous after an agent endpoint or family declaration changes, particularly for renamed models whose lineage cannot be reconstructed from the model ID.",
+      "evidence": "ADR-007:60 requires all three identities to be recorded with every artifact, and ADR-005:21 requires recording the user's family declaration. The agents, executions and review_rounds schemas retain IDs and model names but no provider/family snapshot or immutable registry revision reference.",
+      "recommendation": "Persist the effective provider, model family and registry revision with executions and review evidence, and specify how historical gates use those immutable values."
+    },
+    {
+      "id": "ATLAS-P12",
+      "severity": "MEDIUM",
+      "category": "adapter_policy_contradiction",
+      "file": "docs/security-model.md",
+      "location": "line 48",
+      "description": "The mandatory Codex effective-configuration policy still prohibits other providers, while the local billing policy requires an explicitly selected OSS provider. Implementers cannot satisfy both policies for the fully local writer.",
+      "evidence": "security-model.md:48 requires explicit pins for 'no MCP servers or other providers'. agent-compatibility.md:139 requires --oss, --local-provider and a pinned endpoint for local billing; line 141 requires a separate hostile-config fixture for each billing mode.",
+      "recommendation": "Make the security policy billing-specific: prohibit unconfigured providers while allowing exactly the configured local provider and endpoint for local billing. Align hostile-config assertions with that rule."
+    }
+  ]
+}

@@ -31,6 +31,10 @@ Status: Phase 0 draft · 2026-10-22
 | R13 | SQLite corruption / disk full | Low | High | `synchronous=FULL`, backup before migrations plus a daily backup, `quick_check` on start, restore flow |
 | R14 | Merged phase breaks production despite green CI | Medium | High | Feature flags and expand/contract in plans (the challenger checks for this). Post-merge base CI check. Revert-PR flow. ATLAS does not claim deployment health without a configured verifier |
 | R15 | Scope: building all 10 phases is a large effort | High | Medium | Thin vertical slices. Each phase is useful on its own (e.g. Phase 1 + 2 already give an agent status board) |
+| R25 | User-added agent manifests or local models weaken review quality or bypass isolation | Medium | High | Unverified manifests limited to read-only roles and labelled; isolation flags need fixture tests to become verified; reviewer model shown on every gate; ADR-005 family rules unchanged (ADR-007) |
+| R26 | Source code leaks to a remote "local" endpoint | Low | High | Loopback-only check after DNS resolution on every request; remote needs per-agent opt-in and a dashboard warning (security-model.md §3.11) |
+| R27 | Linux platform divergence (sandbox, agent boundary, secret store) | Medium | Medium | Same VM boundary on both OSes; Linux `AgentBoundary` is a Phase 2 spike with fail-closed outcome; CI on both OSes from slice 1.1 |
+| R28 | Provider product-integration terms may apply to distributing ATLAS, not only to hosting it | Medium | Medium | ATLAS meets the stated conditions (ADR-004). Applicability is confirmed with Anthropic before any public release; OpenAI/Google terms are re-checked per new manifest |
 
 ## 2. Decisions requiring user approval
 
@@ -43,8 +47,11 @@ Status: Phase 0 draft · 2026-10-22
 | D5 | Codex on public repos | **Blocked by default.** The user currently works only on private personal projects. Revisit if a public repo is ever registered | ✅ Approved 2026-10-22 |
 | D6 | Auto-merge | **Off.** Every merge needs the user's approval in ATLAS, plus GitHub's own requirements | ✅ Approved 2026-10-22 (revisit later) |
 | D7 | Plan approval mode | **Supervised.** The user approves every plan before implementation | ✅ Approved 2026-10-22 |
-| D8 | ATLAS's own repo | Private GitHub repo `vishnuknehru/atlas-orchestrator`, PR per phase | ✅ Approved 2026-10-22 |
+| D8 | ATLAS's own repo | Private GitHub repo `vishnuknehru/atlas-orchestrator`, PR per phase. Revisit when ATLAS is shared with others (ADR-007); a public repo would need a licence and a SECURITY.md | ✅ Approved 2026-10-22 |
 | D9 | Residual trust in agent CLIs | Provider CLI processes run as the user and can read the user's files. ATLAS cannot sandbox them without breaking their auth (security-model.md §5.2) | ✅ Acknowledged 2026-10-22 |
 | D10 | Models | Pin explicit models per role in config, with no `--fallback-model`. Defaults are chosen in Phase 2 from `agy models`, `claude` and `codex` docs | **Needs approval in Phase 2** |
 | D11 | Test-sandbox mechanism | **Docker containers on Colima** (security-model.md §5.1). One-time user setup: a dedicated APFS volume with reserve = quota for the Colima `atlas` VM, plus `colima start --profile atlas` with no host mounts. The Seatbelt and dedicated-user options are kept on file, not enabled | ✅ Approved 2026-10-22 |
-| D12 | Encrypt LangGraph checkpoints | **No.** `graph.db` holds only IDs, states and counters; FileVault is on (verified 2026-10-22). Revisit if checkpoint contents grow | ✅ Approved 2026-10-22 |
+| D12 | Encrypt LangGraph checkpoints | **No.** `graph.db` holds only IDs, states and counters; FileVault is on (verified 2026-10-22). Revisit if checkpoint contents grow. Other operators: full-disk encryption (FileVault / LUKS) is recommended in the install guide | ✅ Approved 2026-10-22 |
+| D13 | Platforms (ADR-007 §6) | **macOS and Linux.** Platform code behind `SecretStore`, `TestSandbox`, `AgentBoundary` and service-manager interfaces. Same Colima VM boundary on both. Windows only via WSL2, later | ✅ Approved 2026-10-22 |
+| D14 | Local / open-weight models (ADR-007 §4) | **Write roles through agent CLIs** that support local models (e.g. Codex `--oss`). **Read-only roles may use an OpenAI-compatible HTTP endpoint**, loopback only unless explicitly opted in. ATLAS does not build its own agent loop | ✅ Approved 2026-10-22 |
+| D15 | API-key billing (ADR-007 §5) | **Explicit opt-in per agent.** Key in the OS secret store, injected only into that agent's process. Never a fallback; `allow_paid_api_fallback` stays `false` | ✅ Approved 2026-10-22 |

@@ -147,7 +147,7 @@ An invalid `(from, to)` pair raises `InvalidTransition`, which is logged and not
 | G-DEP | PENDING→READY | All dependencies are COMPLETED, the project is not PAUSED, and the repo lock is available for the **repository** (not the project) |
 | G-WS | PREPARING_WORKSPACE→IMPLEMENTING | Worktree on its `atlas/...` branch, `HEAD == base_sha` (freshly fetched), tree clean, repo lock held |
 | G-CAP | → any agent-running state | Assigned agent capacity is AVAILABLE (or UNKNOWN with backoff elapsed) and has the required capability |
-| G-IND | assigning review/QA/challenge | Reviewer provider ≠ author provider and model family ≠ author family (ADR-005) |
+| G-IND | assigning review/QA/challenge | Reviewer's derived provider ≠ author's (or both `local`) and model family ≠ author family (ADR-005, ADR-007 §2) |
 | G-CAND | IMPLEMENTING/FIXING→CANDIDATE_CREATED | The agent execution ended (exit 0 and parsed result) and its process group is confirmed gone. Candidate commit created, the worktree is clean afterwards, and diff guards evaluated → `guard_status` recorded |
 | G-DIFF | CANDIDATE_CREATED→TESTING (and AWAITING_APPROVAL→TESTING) | No rows in `candidate_guard_violations`, **or** for every distinct violation kind on this candidate there is an approved approval of **that same kind**, with this `candidate_id`, the current `policy_version`, and not expired (ATLAS-201) |
 | G-TEST | TESTING→CODE_REVIEW | Every required test command has an `executed` test_run for the current candidate with exit 0 **and `integrity=verified`** (source unchanged before and after, §0). The required set is non-empty when `require_tests` |

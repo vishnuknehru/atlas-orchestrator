@@ -1,0 +1,26 @@
+{
+  "verdict": "changes_required",
+  "summary": "Resolved: ATLAS-P05, P08, P09 and P12. ATLAS-P11 remains partially unresolved. One new MEDIUM issue: ATLAS-P21. Reviewed design documents only; no files modified.",
+  "findings": [
+    {
+      "id": "ATLAS-P11",
+      "severity": "MEDIUM",
+      "category": "persistence_contract",
+      "file": "docs/database-design.md",
+      "location": "lines 64–71, 144–158 and 187–205",
+      "description": "Execution and review snapshots now preserve identities, but a plan still has neither an author identity snapshot nor a reference to its authoring execution or registry revision. If configuration changes before the first challenge, the challenger cannot reliably recover the plan author's historical provider and family. Copying author identities into a later review does not establish their provenance.",
+      "evidence": "The plans schema at lines 64–71 stores only author_agent and author_model. Executions snapshot provider, model_family and agent_revision at line 148, but identify only the task, phase and candidate, with no authoring-plan link. Review rounds store author snapshots at lines 193–194, without specifying how they are recovered for an unreviewed plan. ADR-005:10 requires every plan to retain its execution-time identity and prohibits using the current registry for historical gates.",
+      "recommendation": "Persist the author identity snapshot directly on each plan revision, or require an immutable reference to its authoring execution. Populate challenge author identities from that evidence."
+    },
+    {
+      "id": "ATLAS-P21",
+      "severity": "MEDIUM",
+      "category": "manual_provider_identity",
+      "file": "docs/adr/ADR-007-portable-pluggable-providers.md",
+      "location": "lines 60–63",
+      "description": "The provider derivation rules omit manual-handoff agents. Neither example manual agent supplies the billing and endpoint needed for local identity, a remote endpoint and canonical provider, or a hosted CLI manifest. The generic import contract requests only the model. Consequently, the advertised manual QA profiles have no defined way to establish the provider identity required by independence checks and immutable snapshots.",
+      "evidence": "ADR-007:61–63 defines only local-endpoint, remote-endpoint and hosted-CLI derivation. how-to-use.md:106 and 117 configure manual_handoff with only declared_family_required. Its import contract at lines 227–229 declares a model and derives its family, then requires the unspecified agent provider to be independent. database-design.md:134 and 193 require provider values.",
+      "recommendation": "Define provider derivation for manual handoffs, including a configured canonical hosting provider or an explicit validated local declaration. Include the effective provider in the handoff contract and snapshots, and update both example profiles."
+    }
+  ]
+}

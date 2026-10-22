@@ -17,7 +17,7 @@ The handoff happens for any step assigned to `antigravity`. By default that mean
 | **Implementation challenge** (optional) | If configured as a second reviewer | `review_result` |
 | **Plan challenge** (optional) | If configured as challenger | `review_result` |
 
-The dashboard shows the phase as **⏸ AWAITING_MANUAL — Antigravity**. If notifications are enabled, you'll also get a macOS notification (Phase 9).
+The dashboard shows the phase as **⏸ AWAITING_MANUAL — Antigravity**. If notifications are enabled, you'll also get a desktop notification (Phase 9).
 
 Nothing else in that project moves forward while you're away. Other projects keep running.
 
@@ -120,12 +120,13 @@ Imported results are always labelled **"manually executed via Antigravity — ag
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "type": "object",
-  "required": ["nonce", "step", "model", "verdict", "acceptance_criteria", "findings", "tests_executed", "tests_proposed"],
+  "required": ["nonce", "step", "model", "provider", "verdict", "acceptance_criteria", "findings", "tests_executed", "tests_proposed"],
   "additionalProperties": false,
   "properties": {
     "nonce": { "type": "string" },
     "step": { "enum": ["qa_review", "ui_verification", "implementation_challenge", "plan_challenge"] },
     "model": { "type": "string", "description": "Exact model id as shown by `agy models`" },
+    "provider": { "type": "string", "description": "Inference provider; must equal the agent's configured provider (google for Antigravity; ADR-007 §2 rule 4)" },
     "verdict": { "enum": ["pass", "changes_required", "blocked"] },
     "acceptance_criteria": {
       "type": "array", "minItems": 1,
@@ -220,7 +221,7 @@ different agent reviewed it. Your job is to find what they missed. Do not seek c
 
 ## Output
 Reply with ONLY one JSON object matching context/../result.schema.json. Set "nonce" to "{{nonce}}",
-"step" to "qa_review", and "model" to the exact model id you are running as.
+"step" to "qa_review", "model" to the exact model id you are running as, and "provider" to "{{provider}}".
 ````
 
 ### 6.2 UI verification (appended to 6.1 for `ui` phases)
@@ -239,7 +240,7 @@ You are an adversarial reviewer. Assume the {{artifact_kind}} below is wrong unt
 Evaluate: incorrect assumptions, security, backward compatibility, missing requirements, unnecessary complexity,
 testing gaps, rollback feasibility, and whether each phase is independently mergeable.
 Every finding needs evidence that points at a specific line, file or plan section. Do not report style nits as HIGH.
-Output ONLY JSON matching result.schema.json with "step": "{{step}}", "nonce": "{{nonce}}", "model": "<your model id>".
+Output ONLY JSON matching result.schema.json with "step": "{{step}}", "nonce": "{{nonce}}", "model": "<your model id>", "provider": "{{provider}}".
 ```
 
 ## 7. Timeouts, skipping and reassignment

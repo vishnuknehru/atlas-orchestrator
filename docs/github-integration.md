@@ -83,7 +83,7 @@ Phase 5 ships merge-queue support behind `merge_queue_support: false`. It can be
 - It never treats a merged PR whose head ≠ candidate as gated delivery.
 
 ## 7. Credentials
-- **D3:** each project uses the user's PAT, which ATLAS reads from the macOS Keychain (`atlas.<project_id>.github`, stored by the user). Before it is ever used, ATLAS checks it with the read-only permission probe (`verify-github-pat` logic). **There is no fallback** to the broad `gh` keyring login (`gho_`, scopes `repo`/`workflow`/`read:org`/`gist`). A missing or under-privileged PAT gives `BLOCKED(github_credential)` (ATLAS-D12).
+- **D3:** each project uses the user's PAT, which ATLAS reads from the OS secret store — macOS Keychain or Linux Secret Service (`atlas.<project_id>.github`, stored by the user; ADR-007 §6). Before it is ever used, ATLAS checks it with the read-only permission probe (`verify-github-pat` logic). **There is no fallback** to the broad `gh` keyring login (`gho_`, scopes `repo`/`workflow`/`read:org`/`gist`). A missing or under-privileged PAT gives `BLOCKED(github_credential)` (ATLAS-D12).
 - The PAT is injected as `GH_TOKEN` only into gh/git subprocesses started by the GitHub service. Git push uses `gh auth git-credential`, so tokens never land in git config or URLs.
 - These subprocesses run outside the test sandbox. Tests and agents never receive the token (security-model.md §3.3).
 

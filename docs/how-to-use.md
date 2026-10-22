@@ -87,12 +87,14 @@ You list the agents you have in `~/.atlas/agents.yaml`, through the dashboard (S
 | `claude_cli`, `codex_cli` (built-in, verified) | Claude Code, or Codex with ChatGPT sign-in, an API key or a local OSS provider | Any role the manifest allows |
 | `manual_handoff` (built-in) | A tool you run yourself, e.g. Antigravity | QA, or any read-only role |
 | `openai_compatible_http` | A local model server (Ollama, LM Studio, vLLM, `llama-server`) | **Read-only roles only** (challenger, reviewer) |
-| A manifest you add yourself | Another agent CLI | Read-only roles until it becomes `verified` through an ATLAS PR |
+| Another agent CLI | — | Not in this release. A new CLI is added only as a verified manifest in an ATLAS PR |
 
 **Billing** is set per agent and never changes on its own:
 - `subscription`: the CLI's own login.
 - `local`: your own model server.
-- `api_key`: you store the key with **[P10]** `atlas secrets set <agent_id>` (until then, the OS commands in §1.3 with service `atlas.agent.<agent_id>`). Only that agent's process receives it.
+- `api_key`: you store the key with **[P10]** `atlas secrets set <agent_id>` (until then, the OS commands in §1.3 with service `atlas.agent.<agent_id>`). Only that agent receives it.
+  - HTTP agents get it as a request header.
+  - A CLI agent gets it only once the CLI is proven not to pass it on to the commands it runs. Until then that agent is `BLOCKED(api_key_not_isolated)`; for `claude_cli` and `codex_cli` this is proven or refuted in Phase 2.
 
 If a subscription runs out, ATLAS pauses. It never moves the work to a paid API agent.
 
@@ -118,12 +120,13 @@ agents:
 ```
 
 Rules ATLAS enforces for any profile:
-- The reviewer, challenger and QA must be a different agent **and** a different model family from the author (ADR-005).
+- The reviewer, challenger and QA must come from a different provider **and** a different model family than the author (ADR-005). Two local models count as different providers, so for them only the family must differ.
 - Unknown families block until you declare `model_family`.
 - A profile that can't satisfy a role shows `BLOCKED(agent_config)`.
 - Model servers must be on `127.0.0.1` unless you set `allow_remote_endpoint: true` for that agent. The dashboard then warns that code leaves your machine.
 - Gate results show which model reviewed the change. A small local model is allowed, but you can see what you're relying on.
 - Model ids above are examples. Pin the ones you actually run (D10).
+- Codex agents (any billing) are blocked on public repositories (D5).
 
 ## 2. Register a project **[P1 record; P5 protection discovery; P4 test config]**
 Dashboard → **Projects → Register repository**:

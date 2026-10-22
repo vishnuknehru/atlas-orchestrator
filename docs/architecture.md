@@ -129,7 +129,7 @@ Gates accept only `executed` or `remote_verified` evidence for tests, CI and mer
 ## 7. Trust boundaries
 
 1. **User ↔ ATLAS.** Trusted. Localhost UI with a token.
-2. **ATLAS ↔ agents.** CLI binaries with a `verified` manifest are trusted as published; `unverified` ones are limited to read-only roles. Local model servers are trusted only to return text. Their *output* is untrusted data. Agents run with cwd set to the phase worktree, with a scrubbed env (no `GH_TOKEN`, no ATLAS secrets) and restrictive permission flags.
+2. **ATLAS ↔ agents.** Only CLIs with a `verified` manifest are launched, and they are trusted as published. Local model servers are trusted only to return text. Their *output* is untrusted data. Agents run with cwd set to the phase worktree, with a scrubbed env (no `GH_TOKEN`, no ATLAS secrets) and restrictive permission flags.
 3. **ATLAS ↔ repository content.** Untrusted. This includes READMEs, `AGENTS.md`/`CLAUDE.md`, `.claude/`, `.codex/`, `.mcp.json`, issues, CI logs and PR comments. ATLAS policy never comes from repo content (see [security-model.md](security-model.md)).
 4. **ATLAS ↔ GitHub.** Authenticated through gh. Mutations are idempotent and reconciled.
 5. **Project ↔ project.** Separate rows, worktrees, artifact references and handoff dirs. Agent invocations receive only the current project's worktree.
@@ -168,7 +168,7 @@ Roles point at agents in the user's registry (ADR-007 §2). The table below is t
 | plan challenger | codex | claude (only if plan author ≠ claude) |
 | developer | codex | claude |
 | code reviewer | claude | codex (only if developer ≠ codex) |
-| QA | antigravity (manual) | none: wait for the manual handoff (D4) |
+| QA | antigravity (manual handoff; any configured QA or `manual_handoff` agent works) | none: wait for the manual handoff (D4) |
 
 ## 10. Technology choices
 

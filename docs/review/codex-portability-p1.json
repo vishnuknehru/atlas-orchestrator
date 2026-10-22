@@ -1,0 +1,96 @@
+{
+  "verdict": "changes_required",
+  "summary": "The amendment preserves explicit billing opt-in and fail-closed sandbox goals, but leaves credential inheritance and unverified-agent isolation unresolved. Both example profiles satisfy family independence if manual QA declarations are validated; additional provider-identity, endpoint, storage, and policy contradictions need correction before implementation.",
+  "findings": [
+    {
+      "id": "ATLAS-P01",
+      "severity": "CRITICAL",
+      "category": "credential_exposure",
+      "file": "docs/adr/ADR-007-portable-pluggable-providers.md",
+      "location": "lines 95–99",
+      "description": "Injecting an API key into a shell-capable agent's environment also makes it available to descendants unless the CLI explicitly removes it. ATLAS's scrubbing of subprocesses it launches does not cover agent-launched commands. Repository-directed commands can therefore read or exfiltrate the key, contradicting the promised single-process exception.",
+      "evidence": "Line 98 injects the key into the agent subprocess. security-model.md:56 promises that 'No other process ever gets that key', but the boundary described at security-model.md:260 restricts paths and sockets rather than inherited environment variables.",
+      "recommendation": "Require and adversarially verify credential isolation for agent-launched tools before enabling API-key write roles. Where the CLI cannot provide it, block that combination pending a separate credential-broker or runner design."
+    },
+    {
+      "id": "ATLAS-P02",
+      "severity": "HIGH",
+      "category": "agent_isolation",
+      "file": "docs/adr/ADR-007-portable-pluggable-providers.md",
+      "location": "lines 63–78",
+      "description": "Assigning an unverified executable a read-only role does not enforce read-only execution. Its manifest controls executable arguments and isolation flags, while the shared outer boundary only denies selected ATLAS and Docker paths. An unfamiliar CLI can execute repository hooks or modify the worktree despite its reviewer assignment.",
+      "evidence": "Lines 69 and 76 permit manifests without tested isolation behavior. security-model.md:105–106 relies on the generic wrapper and the role restriction; security-model.md:260 does not specify a read-only worktree or deny arbitrary process execution.",
+      "recommendation": "Defer unverified CLI manifests, or require an independently enforced read-only filesystem and execution boundary for them, including capability and authentication probes. Keep the HTTP reviewer as the initial extension mechanism."
+    },
+    {
+      "id": "ATLAS-P03",
+      "severity": "HIGH",
+      "category": "remote_endpoint_leakage",
+      "file": "docs/security-model.md",
+      "location": "line 107",
+      "description": "The DNS check is insufficiently specified to establish the claimed leakage protection. Checking a resolved address and then letting the HTTP client resolve again leaves a rebinding race. Redirects and environment-configured proxies can also move a source-bearing request off-machine without changing the configured endpoint.",
+      "evidence": "Line 107 claims that checking after DNS resolution on every request prevents rebinding, but specifies neither connection-address pinning, redirect rejection, nor proxy handling. ADR-007:86 says the request contains the candidate diff and plan.",
+      "recommendation": "Pin the connection to the validated address, disable environment proxies, reject redirects by default, and validate every destination if redirects are supported. Apply equivalent endpoint policy to local CLI providers."
+    },
+    {
+      "id": "ATLAS-P04",
+      "severity": "HIGH",
+      "category": "credential_redaction",
+      "file": "docs/adr/ADR-007-portable-pluggable-providers.md",
+      "location": "lines 98–100",
+      "description": "Arbitrary agent keys and local bearer tokens need not match the existing token patterns. Making additional patterns optional allows a CLI error, debug event, or tool output containing such a credential to be persisted in logs and artifacts.",
+      "evidence": "Line 99 relies on 'sk-…' patterns and says manifests 'may' add patterns. Line 100 permits local bearer tokens. security-model.md:60 lists known formats but does not require redacting the actual configured secret value.",
+      "recommendation": "Register every loaded secret with the redactor before launching or requesting anything, require exact-value redaction across all output and error paths, and test nonstandard bearer tokens."
+    },
+    {
+      "id": "ATLAS-P05",
+      "severity": "MEDIUM",
+      "category": "review_independence",
+      "file": "docs/adr/ADR-005-review-independence.md",
+      "location": "lines 21–22",
+      "description": "Registry IDs replace provider identity, weakening the approved two-part independence rule. Two aliases for the same provider now satisfy the provider check. Different declared families can therefore pass even when both assignments use the same hosting provider. This does not by itself bypass the known-family check, but it removes the separately required provider distinction.",
+      "evidence": "Line 11 requires different providers and families; line 22 implements provider comparison using registry agent IDs. architecture.md:161 and workflow-state-machine.md:150 still require provider inequality.",
+      "recommendation": "Store agent ID, inference-provider identity, and model lineage separately. Define the intended local-provider exception explicitly and retain canonical provider comparison for hosted agents."
+    },
+    {
+      "id": "ATLAS-P06",
+      "severity": "MEDIUM",
+      "category": "linux_storage",
+      "file": "docs/security-model.md",
+      "location": "line 252",
+      "description": "A fixed-size LVM filesystem does not necessarily reserve physical storage. A thin-provisioned logical volume can report the requested filesystem capacity while sharing an exhaustible backing pool. findmnt and df cannot establish the promised reservation.",
+      "evidence": "Line 252 says a fixed-size filesystem provides both reserve and quota and proposes findmnt/df checks. The kernel's [thin-provisioning documentation](https://docs.kernel.org/admin-guide/device-mapper/thin-provisioning.html) describes multiple virtual devices sharing a data volume.",
+      "recommendation": "Require a dedicated partition or fully allocated thick LV; inspect the backing device and reject thin, sparse, or otherwise shared allocation unless a separate reservation mechanism is proven."
+    },
+    {
+      "id": "ATLAS-P07",
+      "severity": "MEDIUM",
+      "category": "policy_contradiction",
+      "file": "docs/agent-compatibility.md",
+      "location": "lines 127–131 and 215",
+      "description": "The Codex policy simultaneously forbids --oss and depends on it for the fully local profile. The amendment also narrows D5 to ChatGPT sign-in while other operative documents still block Codex on every public repository. Implementers cannot derive one consistent adapter policy.",
+      "evidence": "Line 131 lists --oss under 'Never passed'; line 215 recommends it and exempts local billing from D5. ADR-004:13 limits the block to ChatGPT sign-in, while agent-compatibility.md:100 and how-to-use.md:131 retain the blanket block.",
+      "recommendation": "Define separate subscription, API-key, and local Codex capability policies. Explicitly record the D5 scope amendment and update every prohibition, registration check, and hostile-config fixture consistently."
+    },
+    {
+      "id": "ATLAS-P08",
+      "severity": "MEDIUM",
+      "category": "provider_terms",
+      "file": "docs/adr/ADR-004-cli-subprocess-adapters.md",
+      "location": "line 12",
+      "description": "The cited Claude documentation no longer supports the blanket prohibition attributed to it, and the distribution amendment does not assess the product-integration conditions now stated there. Self-hosting with each user's own account is not itself evidence of a terms violation, but the design's compliance conclusion needs updating.",
+      "evidence": "Line 12 attributes an 'on behalf of their users' prohibition to the linked page. The current [legal and compliance page](https://code.claude.com/docs/en/legal-and-compliance) instead discusses commercial terms for product integration, unmodified binaries, unrestricted authentication methods, and direct end-user authentication and billing.",
+      "recommendation": "Capture dated source evidence and assess ATLAS's distributed integration against the current conditions. Separate ATLAS's chosen hosted-service non-goal from restrictions actually imposed by provider terms."
+    },
+    {
+      "id": "ATLAS-P09",
+      "severity": "MEDIUM",
+      "category": "qa_scope_contradiction",
+      "file": "docs/adr/ADR-007-portable-pluggable-providers.md",
+      "location": "lines 127–128",
+      "description": "The amendment permits any eligible QA agent, but the implementation roadmap still requires Antigravity for the minimum QA gate. Consequently, the advertised fully local profile has no consistent implementation path even when its family assignments are valid.",
+      "evidence": "Line 128 allows any manifest supporting qa or generic manual_handoff. implementation-roadmap.md:78 requires an 'Antigravity handoff'; how-to-use.md:115–117 configures generic manual QA. architecture.md:171 also retains Antigravity-specific QA wording.",
+      "recommendation": "Make the minimum QA gate provider-neutral, preserve D4 as a pending-handoff assignment lock, and describe Antigravity as one supported manual-handoff profile."
+    }
+  ]
+}

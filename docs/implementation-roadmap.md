@@ -38,10 +38,10 @@ Phase 6 adds only auto-resume, capacity scheduling and the full fault-injection 
   - Claude: `--setting-sources user` vs project CLAUDE.md/skills; usage-limit result shape; auth probe; OS sandbox via settings.
   - Codex: `--ignore-user-config` + `-c` pins and the effective config; read scope of sandboxed commands; `workspace-write` network; limit/auth failure signatures.
   - Use tiny prompts to save quota.
-- 2.0b **Linux and local-model spike items** (ADR-007): bubblewrap/Landlock `AgentBoundary` with the same Docker-socket test; Codex `--oss` effective config and endpoint; one OpenAI-compatible server (Ollama) structured-output behaviour.
+- 2.0b **Linux and local-model spike items** (ADR-007): bubblewrap/Landlock `AgentBoundary` with the same Docker-socket test; Codex `--oss` effective config and endpoint; one OpenAI-compatible server (Ollama) structured-output behaviour; `credential_isolation` for `claude_cli` and `codex_cli` (does an agent-launched `env` show an injected key?).
 - 2.1 `atlas-exec` launcher + supervisor: durable launch handshake, run files, process groups, quiesce protocol, timeouts, artefacts, redaction, env scrub (with the per-agent API-key exception, D15). Also the **outer `AgentBoundary` wrapper for agent processes** (Seatbelt on macOS, bubblewrap on Linux), which denies `~/.colima`, `~/.docker`, `~/.atlas` and Docker sockets. Spike test: an agent command can't reach the Docker socket; shell-capable roles are BLOCKED if the wrapper fails (security-model.md §5.1.9).
 - 2.2 Blob store + `artifact_refs` + `executions`.
-- 2.3 `AgentAdapter` protocol, **manifest-driven generic `cli` adapter** (ADR-007 §3) with `verified`/`unverified` trust levels, `FakeAdapter` fixture replay, capability probe (version + help hash + required flags).
+- 2.3 `AgentAdapter` protocol, **manifest-driven generic `cli` adapter** (ADR-007 §3; only verified manifests load), exact-value secret redaction, `FakeAdapter` fixture replay, capability probe (version + help hash + required flags).
 - 2.4 Built-in manifests `claude_cli` and `codex_cli`, `ManualHandoffAdapter` (packet + import validation, criteria completeness), and `OpenAICompatibleHttpAdapter` for read-only roles (loopback check after DNS resolution, schema-validated reply, no tools).
 - 2.5 Capacity manager + Agent Status screen.
 
@@ -52,7 +52,7 @@ Phase 6 adds only auto-resume, capacity scheduling and the full fault-injection 
 - env-scrub;
 - crash between launch and run-file.
 
-**Acceptance:** real auth and capacity are shown for Claude and Codex, and `MANUAL_ONLY` for Antigravity. A read-only "hello" execution per headless agent is recorded, including one local-model review through `openai_compatible_http`. An `unverified` manifest is refused for a write role.
+**Acceptance:** real auth and capacity are shown for Claude and Codex, and `MANUAL_ONLY` for Antigravity. A read-only "hello" execution per headless agent is recorded, including one local-model review through `openai_compatible_http`. A user-added manifest is refused. An API-key CLI agent without `credential_isolation: verified` is `BLOCKED(api_key_not_isolated)`.
 
 ## Phase 3 — Planning & challenge
 - Repository analysis (deterministic scan, then a read-only Claude summary), plan schema with criterion IDs, DAG validation, plan revisions.
@@ -75,12 +75,12 @@ Phase 6 adds only auto-resume, capacity scheduling and the full fault-injection 
 
   G-TEST is impossible without it. macOS-toolchain projects, source-mutating tests, submodules and LFS stay BLOCKED.
 - Code review on the candidate diff; repair loop; fix verification by an independent reviewer.
-- **Minimum QA gate:** Antigravity handoff for the candidate with a dedicated QA worktree, import, criteria completeness and verdict consistency. No reassignment path (D4). Without a valid QA result or waiver, the phase cannot reach READY_FOR_DELIVERY.
+- **Minimum QA gate (provider-neutral, ADR-007):** QA by the configured QA agent. With the recommended profile, that is an Antigravity manual handoff; any `manual_handoff` agent works the same way. It uses a dedicated QA worktree, import, criteria completeness and verdict consistency. No reassignment path (D4). Without a valid QA result or waiver, the phase cannot reach READY_FOR_DELIVERY.
 
 **Acceptance:** on a local fixture repo, one phase reaches READY_FOR_DELIVERY with these, all bound to one candidate:
 - tests `executed` inside the sandbox;
 - an independent review;
-- an imported QA result.
+- an imported QA result (from the configured QA agent).
 
 A new fix makes the earlier evidence stale. A failing test triggers a bounded repair loop and then BLOCKED. The sandbox self-test shows that `~/.atlas` and `~/.ssh` are unreadable from tests.
 

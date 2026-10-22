@@ -19,7 +19,8 @@ Antigravity can run Claude and GPT-OSS models (`evidence/agy-models.txt`). Claud
   - `deepseek-*` → deepseek;
   - unknown → `unknown`, which counts as matching the author's family, so independence is not satisfied.
 - **Declared family (ADR-007).** A registry entry may set `model_family` for a model the built-in map doesn't know, such as a fine-tune or a renamed local model. The user's declaration is recorded with each artifact. If it contradicts the built-in map, the built-in map wins. A fine-tune counts as the family of its base model.
-- **Provider for local and self-hosted agents.** The "provider ≠ author provider" check compares registry agent ids. Two local agents can satisfy it, but only if their model families also differ.
+- **Provider identity (ADR-007 §2).** The "provider ≠ author provider" check compares the *derived* inference provider, not the registry id: `anthropic`, `openai`, `google`, `local`, or the host of an opted-in remote endpoint. Two registry aliases for the same hosted provider never satisfy it.
+- **Local exception, stated explicitly.** The provider rule exists so that a single vendor's systems and policies can't both write and judge a change. Models running locally on the operator's own server share no vendor. So when **both** agents have provider `local`, the provider check counts as satisfied, and independence rests on the model-family check alone. In every other case, both checks apply.
 - If independence cannot be met, the step goes to `AWAITING_MANUAL` or `BLOCKED`. The author is never used as the sole reviewer.
 - A fix to a finding is "verified" only by an independent reviewer's re-check on the new SHA, plus re-executed tests.
 

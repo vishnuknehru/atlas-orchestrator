@@ -20,7 +20,7 @@ Status: Phase 0 draft · 2026-10-22
 | The user (local, authenticated to the dashboard) | Trusted |
 | ATLAS core code | Trusted (reviewed, tested) |
 | Agent CLI binaries with a `verified` manifest, as published | Trusted to behave as documented |
-| Agent CLIs with a user-added `unverified` manifest | Partly trusted: read-only roles only, gate results labelled (ADR-007 §3) |
+| User-added agent manifests | Not loaded in this release (ADR-007 §3) |
 | Local model servers (Ollama, LM Studio, vLLM, …) | Trusted only to return text; their output is untrusted data |
 | **Agent output** (text, JSON, diffs, commands they ran) | **Untrusted data** |
 | **Repository content** (code, docs, `AGENTS.md`, `CLAUDE.md`, `.claude/`, `.codex/`, `.mcp.json`, CI config, issues, PR comments, CI logs) | **Untrusted** |
@@ -53,11 +53,14 @@ Controls:
 Controls:
 - **Environment scrubbing.** Agent, test and git subprocesses get an allowlisted env (`PATH`, `HOME`, `LANG`, `TERM`, `TMPDIR` set per execution, plus project-declared non-secret vars). `GH_TOKEN`, `GITHUB_TOKEN`, `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `AWS_*` and anything matching `*TOKEN*|*SECRET*|*KEY*|*PASSWORD*` are explicitly removed.
   - `ANTHROPIC_API_KEY` must be absent so that Claude Code never silently switches billing to an API key. This is the "no silent billing change" requirement.
-  - **Single exception (D15):** an agent configured with `billing: api_key` gets its own key, read from the secret store, in the one variable its manifest names. No other process ever gets that key, and the env-scrub test asserts this for every other agent, test, git and gh process.
+  - **Single exception (D15, ADR-007 §5):** an agent configured with `billing: api_key` gets its own key.
+    - For HTTP agents, the key goes only in a request header.
+    - For a CLI agent, it goes in the one variable its manifest names, and only if the manifest has `credential_isolation: verified`, which a fixture test proves: commands the agent launches must not inherit the key. Without that, the agent is `BLOCKED(api_key_not_isolated)`.
+    - The env-scrub test asserts the key is absent from every other agent, every test, git and gh process, and every agent-launched command.
 - **gh is used only by the GitHub service**, never inside an agent process. Agents get no `Bash(gh *)` permission. Codex `workspace-write` network policy is to be verified (see agent-compatibility.md).
 - **ATLAS never reads** `~/.claude*`, `~/.codex/auth.json` or Antigravity storage, and never stores provider tokens.
 - **Least-privilege GitHub token** (decision D3: the user's PAT, verified before use). Use a fine-grained PAT per project, limited to that single repository, with permissions contents:write, pull_requests:write, checks:read and actions:read. Store it in Keychain and pass it to `gh` via `GH_TOKEN` only in the GitHub service's subprocess env. The default gh `gho_` token has broad `repo` + `workflow` scope across all repos.
-- **Redaction.** A log/artefact writer redacts known token patterns (`gh[opsu]_…`, `sk-…`, `AIza…`, JWTs, PEM blocks) before persisting. Artefacts are written with mode 0600 and `~/.atlas` with 0700.
+- **Redaction.** Every secret ATLAS loads is registered with the redactor before use and removed by **exact value** (ADR-007 §5). In addition, a log/artefact writer redacts known token patterns (`gh[opsu]_…`, `sk-…`, `AIza…`, JWTs, PEM blocks) before persisting. Artefacts are written with mode 0600 and `~/.atlas` with 0700.
 
 ### 3.4 Command / argument injection (Tampering)
 *Context:* branch names, file paths and PR titles derived from tasks or agents. There is a reported Codex bug class in which malicious branch names injected commands in task setup.
@@ -103,8 +106,11 @@ Controls:
 
 Controls:
 - **No free-form commands.** Manifests are data: an argv template with no shell and allowlisted placeholders. The generic `cli` adapter enforces the same supervisor, env scrub, `AgentBoundary` wrapper and structured-output validation as the built-in adapters.
-- **Unverified means read-only.** A user-added manifest can't hold a write role, and its findings are labelled `unverified_agent`. Promotion to `verified` happens only through a reviewed ATLAS PR with fixture and hostile-config tests.
-- **Loopback by default.** ATLAS rejects an `openai_compatible_http` endpoint that resolves to anything but loopback or a Unix socket, unless the agent has `allow_remote_endpoint: true`. The check is done after DNS resolution on every request, so DNS rebinding can't bypass it. If remote is allowed, the dashboard shows that code leaves the machine. The HTTP adapter sends no tools, so a model can only return text.
+- **Only verified manifests load.** A user-added manifest is refused, because a role assignment can't make an unfamiliar CLI read-only. Adding a manifest takes a reviewed ATLAS PR with fixture and hostile-config tests.
+- **Loopback by default.** ATLAS rejects an `openai_compatible_http` endpoint that resolves to anything but loopback or a Unix socket, unless the agent has `allow_remote_endpoint: true`.
+  - The client connects to the **validated address itself**, so a second DNS lookup can't redirect it.
+  - It ignores proxy environment variables, rejects redirects, and re-validates on every request.
+  - For local CLI providers, the configured endpoint is checked before launch and pinned on the command line (ADR-007 §4). If remote is allowed, the dashboard shows that code leaves the machine. The HTTP adapter sends no tools, so a model can only return text.
 - **Family can't be lowered.** A declared `model_family` can't override the built-in map, and an unknown family blocks independence (ADR-005).
 - **Agent config isn't repo-controlled.** `agents.yaml` changes only through the dashboard or CLI and is recorded in `audit_log`. Repository content can't add or change agents.
 
@@ -249,7 +255,7 @@ Repository code never runs as part of the self-test.
   2. Colima's data path resolves onto that volume;
   3. the execution's preallocation fits in the VM.
 
-  **On Linux (D13)** the equivalent is a dedicated partition or a fixed-size LVM logical volume, mounted at the Colima/Lima data path. A fixed-size filesystem gives both the reserve and the quota. ATLAS runs the same three checks, using `findmnt` / `df` for check 1. Exact steps are confirmed in Phase 4.
+  **On Linux (D13)** the equivalent is a dedicated partition or a **fully allocated (thick)** LVM logical volume, mounted at the Colima/Lima data path. Thin-provisioned LVs, sparse files and loop images share or defer their backing storage, so they are rejected. For check 1, ATLAS inspects the backing device (`findmnt`, `lsblk`, `lvs -o lv_layout,pool_lv`) and requires a partition or a linear/striped LV with no pool. Exact steps are confirmed in Phase 4.
 
   Otherwise: `BLOCKED(no_reserved_sandbox_storage)`. ATLAS's own data (`~/.atlas`, the DBs) is **not** on that volume, so sandbox growth can't touch it.
 - **Host volume exhaustion by other processes** (outside ATLAS's control) is detected, not prevented. If free space on the volume holding `~/.atlas` falls below 5 GB, the scheduler stops admitting work, in-flight executions are quiesced, and every project shows `BLOCKED(host_disk_low)` until space is freed. This is a separate path from guest `ENOSPC`. SQLite durability (`synchronous=FULL`) means a failed write aborts its transaction rather than corrupting state.

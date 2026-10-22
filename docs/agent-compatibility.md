@@ -128,7 +128,17 @@ Never passed:
 - `--dangerously-bypass-approvals-and-sandbox`
 - `--dangerously-bypass-hook-trust`
 - `-s danger-full-access`
-- `--oss`
+- `--oss` / `--local-provider` **for agents with `billing: subscription` or `api_key`**
+
+Per-billing Codex policy (ADR-007):
+
+| Billing | `--oss` | Auth | Public repos (D5) |
+|---|---|---|---|
+| `subscription` | never | ChatGPT sign-in managed by the CLI | blocked |
+| `api_key` | never | key only after `credential_isolation: verified` (Phase 2 spike); until then `BLOCKED(api_key_not_isolated)` | blocked |
+| `local` | **required**, with `--local-provider` and the endpoint pinned; loopback checked before launch | none | blocked (D5 unchanged; narrowing it needs a new decision) |
+
+Each billing mode has its own hostile-config fixture.
 
 To verify in the Phase 2 spike:
 - Whether project `AGENTS.md` and `.codex/config.toml` in the worktree are loaded. If so, they are treated as prompt content and must not be able to change sandbox or approvals.
@@ -177,7 +187,7 @@ class AgentAdapter(Protocol):
     agent_id: str                            # registry id from ~/.atlas/agents.yaml (ADR-007 §2)
     adapter_kind: AdapterKind                # cli | openai_compatible_http | manual_handoff
     manifest: AdapterManifest | None         # for cli: argv templates, parser, failure fixtures, probes
-    trust: Literal["verified", "unverified"] # unverified → read-only roles only
+    provider: str                            # derived inference provider: anthropic | openai | google | local | <remote host>
     async def check_availability(self) -> AvailabilityReport      # binary present, version, capacity state
     async def check_authentication(self) -> AuthStatus            # cheap, no model call where possible
     async def get_capabilities(self) -> Capabilities              # from this file, version-gated
@@ -207,12 +217,13 @@ A manifest is data that the generic `cli` adapter reads. It cannot add code. Fie
 | `failure_patterns` | Exit-code/stderr regex → capacity state, in a versioned fixtures file |
 | `auth_probe` | Cheapest command that reports login state without a model call where possible |
 | `env` | Extra non-secret vars and, for `billing: api_key`, the one variable that receives the agent's key |
+| `credential_isolation` | `verified` only if a fixture proves agent-launched commands don't inherit the key; required for `billing: api_key` |
 | `redaction_patterns` | Extra token formats to redact |
 
-A user-added manifest is `unverified` and limited to read-only roles. A manifest becomes `verified` only through a reviewed ATLAS PR that adds recorded fixtures (success, malformed output, timeout, crash, rate limit, auth expired) and passes the hostile-repo and hostile-config tests. Each new CLI also needs a terms check like the one in §2–§4 before it ships as `verified`.
+Only `verified` manifests load. A user-added manifest is refused. A manifest becomes `verified` only through a reviewed ATLAS PR that adds recorded fixtures (success, malformed output, timeout, crash, rate limit, auth expired) and passes the hostile-repo and hostile-config tests. Each new CLI also needs a terms check like the one in §2–§4 before it ships as `verified`.
 
 ### 6.2 Local and open-weight models
-- **Write roles:** use an agent CLI that can drive a local model. Two examples are Codex with `--oss --local-provider ollama|lmstudio` (flags verified in `evidence/codex-exec-help.txt`; effective config, model selection and endpoint override to verify in Phase 2) and OpenCode (a candidate manifest). The Codex public-repo block (D5) applies only to ChatGPT sign-in, not to a Codex agent with `billing: local`. **To verify in Phase 2.**
+- **Write roles:** use an agent CLI that can drive a local model. Two examples are Codex with `--oss --local-provider ollama|lmstudio` (flags verified in `evidence/codex-exec-help.txt`; effective config, model selection and endpoint override to verify in Phase 2) and OpenCode (a candidate manifest). The Codex public-repo block (D5) applies to every Codex agent, whatever its billing (§3.2 table).
 - **Read-only roles:** `openai_compatible_http` sends one `POST /v1/chat/completions` request.
   - The request asks for a structured output (`response_format: json_schema`). If the server doesn't support that, ATLAS uses JSON mode and validates the reply strictly.
   - No `tools` or functions are sent.

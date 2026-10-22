@@ -1,0 +1,5 @@
+{
+  "verdict": "approved",
+  "summary": "H21 resolved: sandbox guarantee now distinguishes host agent worktrees (docs/how-to-use.md:227). H22 resolved: agent installation and sign-in precede use (lines 90–111). H23 resolved: missing verification script is explicitly unavailable (line 134). H24 resolved: local workflow and GitHub delivery are separately tagged P4 and P5 (lines 319–344). H25 resolved: prompt and result consistently use the packet path (lines 378–389). Compared with origin/main and checked against the design; no new MEDIUM-or-higher issues found.",
+  "findings": []
+}

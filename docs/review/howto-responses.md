@@ -24,3 +24,19 @@ All accepted and fixed. These fixes are not re-verified; the policy blocks only 
 | ATLAS-H11 | MEDIUM | The config example keeps only approved keys (`writable_paths`). Test setup is described as behaviour, with key names to be decided in Phase 4 |
 | ATLAS-H12 | MEDIUM | The manual-merge check is the PR **head at merge** == candidate (plus repo and base), with the squash merge commit recorded and its reachability verified |
 | ATLAS-H13 | MEDIUM | Added the post-merge base-CI check, your rollback decision, the revert phase through the full pipeline, and the effect on dependent phases |
+
+## Review H3 — `codex-howto-h3.json` (step-by-step rewrite) — verdict `changes_required`, 5 MEDIUM
+
+All accepted and fixed.
+
+| ID | Sev | Change made |
+|---|---|---|
+| ATLAS-H21 | MEDIUM | The sandbox guarantee in Step 7 is scoped to tests and dependency setup, with a pointer to the host-worktree caveat for developer agents (Part 8) |
+| ATLAS-H22 | MEDIUM | Step 3 installs, checks and signs in to each agent tool (setup A), or installs a model server, pulls two families and checks it answers (setup B) |
+| ATLAS-H23 | MEDIUM | The PAT check script is described as part of D3 but not yet published; ATLAS checks the token at registration |
+| ATLAS-H24 | MEDIUM | Step 13 is split into "on your computer [P4]" and "on GitHub [P5]" |
+| ATLAS-H25 | MEDIUM | Step 14 uses a `$PKT` packet-folder variable for `PROMPT.md` and `result.json`, matching the runbook |
+
+## Review H4 — `codex-howto-h4.json` — verdict `approved`
+
+H21–H25 confirmed resolved; no new findings.

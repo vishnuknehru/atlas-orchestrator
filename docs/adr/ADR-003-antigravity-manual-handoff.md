@@ -5,7 +5,8 @@
 
 ## Context
 - The [Antigravity terms](https://antigravity.google/terms) §6 say users must not use the Service "in connection with products not provided by us". They also call "using third party software, tools, or services to access the Service" a breach, which can lead to suspension.
-- The [Headless docs](https://antigravity.google/docs/cli/headless/) document `agy -p` for scripting and CI. Google has not stated that a *third-party local orchestrator* may invoke it on a consumer AI Pro account. Forum replies saying it is fine come from unverified community members.
+- The [Antigravity FAQ](https://antigravity.google/docs/faq/) (checked 2026-10-22) says headless mode (`agy -p`) "is intended for direct scripting and CI workflows", and that wrapping `agy` "inside third-party coding agents or applications" is "not supported under consumer plans". It warns that using third-party software to access Antigravity "can result in suspension or termination of your account", and recommends "a Gemini Enterprise or Google AI Studio API key" for third-party agents. ATLAS is such an application even when it runs the unmodified `agy` binary. The FAQ does not say whether Enterprise plans allow it.
+- The [Headless docs](https://antigravity.google/docs/cli/headless/) document `agy -p` for scripting and CI. Nothing there permits a *third-party local orchestrator* to invoke it on a consumer AI Pro account, and the FAQ above rules it out. Forum replies saying it is fine come from unverified community members and contradict the FAQ.
 - The forum shows users reporting 403 ToS suspensions after using third-party tools.
 - `agy` print mode has open bugs: a non-TTY hang (#318) and `permissions.allow` being ignored in print mode (#548).
 

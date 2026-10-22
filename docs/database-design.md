@@ -64,6 +64,8 @@ CREATE TABLE tasks (
 CREATE TABLE plans (
   id TEXT PRIMARY KEY, project_id TEXT NOT NULL, task_id TEXT NOT NULL,
   revision INTEGER NOT NULL, author_agent TEXT NOT NULL, author_model TEXT,
+  author_provider TEXT NOT NULL, author_family TEXT NOT NULL, author_agent_revision INTEGER NOT NULL,  -- snapshot at authoring (ADR-005/007)
+  authoring_execution_id TEXT,                 -- immutable provenance of the snapshot
   base_sha TEXT NOT NULL, plan_blob TEXT NOT NULL REFERENCES blobs(sha256),
   status TEXT NOT NULL,                        -- draft|challenged|approved|superseded
   created_at TEXT NOT NULL,
@@ -191,7 +193,8 @@ CREATE TABLE review_rounds (
   kind TEXT NOT NULL,                          -- plan_challenge|code_review|qa|fix_verification
   reviewer_agent TEXT NOT NULL, reviewer_model TEXT, author_agent TEXT NOT NULL, author_model TEXT,
   reviewer_provider TEXT NOT NULL, reviewer_family TEXT NOT NULL, reviewer_agent_revision INTEGER,
-  author_provider TEXT NOT NULL, author_family TEXT NOT NULL, author_agent_revision INTEGER,   -- immutable G-IND inputs
+  author_provider TEXT NOT NULL, author_family TEXT NOT NULL, author_agent_revision INTEGER,   -- immutable G-IND inputs,
+                                               -- copied from plans.author_* (plan) or the authoring execution's snapshot (candidate), never from the current registry
   verdict TEXT NOT NULL, evidence TEXT NOT NULL CHECK (evidence IN ('agent_reported','manual_imported')),
   criteria_json TEXT,                          -- QA: per-criterion status (validated complete; ATLAS-015)
   execution_id TEXT, cycle INTEGER NOT NULL, created_at TEXT NOT NULL,

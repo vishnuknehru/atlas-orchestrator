@@ -103,7 +103,7 @@ If a subscription runs out, ATLAS pauses. It never moves the work to a paid API 
 agents:
   claude:      { adapter: claude_cli, models: [<claude model>], billing: subscription }
   codex:       { adapter: codex_cli,  models: [<codex model>],  billing: subscription }
-  antigravity: { adapter: manual_handoff, declared_family_required: true }
+  antigravity: { adapter: manual_handoff, provider: google, declared_family_required: true }
 # project roles: architect claude · challenger codex · developer codex · reviewer claude · qa antigravity
 ```
 
@@ -114,7 +114,7 @@ agents:
                     billing: local, endpoint: "http://127.0.0.1:11434/v1" }
   local-reviewer: { adapter: openai_compatible_http, models: [llama-4-maverick], model_family: meta,
                     billing: local, endpoint: "http://127.0.0.1:11434/v1" }
-  manual-qa:      { adapter: manual_handoff, declared_family_required: true }
+  manual-qa:      { adapter: manual_handoff, provider: local, declared_family_required: true }
 # project roles: architect local-coder · challenger local-reviewer · developer local-coder
 #                reviewer local-reviewer · qa manual-qa (you run QA with a non-Qwen model)
 ```
@@ -224,7 +224,7 @@ Only *executed* and *remote-verified* evidence count for tests, CI and merge.
 
 ## 5. The manual QA step (D4 = wait) **[P4 minimal, P7 full]**
 If your QA agent is a `manual_handoff` agent, ATLAS prepares a packet and waits for you. Every manual handoff uses the same import contract:
-- the result must declare the `model` you used;
+- the result must declare the `model` you used and its `provider`, which must match the agent's configured `provider`;
 - ATLAS works out its family (built-in map, or the agent's declared `model_family`);
 - the result is accepted only if that family, and the agent's provider, are independent of the author (ADR-005).
 

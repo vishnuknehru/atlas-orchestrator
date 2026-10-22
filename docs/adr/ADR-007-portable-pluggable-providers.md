@@ -34,6 +34,7 @@ agents:
     billing: subscription
   antigravity:
     adapter: manual_handoff
+    provider: google                  # canonical provider, or local; required for manual_handoff (rule 4 below)
     declared_family_required: true    # the user's imported result must name its model
   local-coder:
     adapter: codex_cli                # same vetted adapter, pointed at a local OSS provider
@@ -61,6 +62,10 @@ agents: { architect: claude, challenger: codex, developer: codex, reviewer: clau
   1. `billing: local` **and** an endpoint that passes the loopback check (§4) → `local`. `billing: local` with a non-loopback endpoint is a config error, rejected at validation.
   2. A remote endpoint (`allow_remote_endpoint: true`) → the user must pick `provider` from ATLAS's fixed list of canonical providers (e.g. `anthropic`, `openai`, `google`, `mistral`, `deepseek`, `together`, `groq`, `openrouter`). The hostname is never used as the identity, because two hostnames can belong to one operator. A remote endpoint with no declared provider is `unknown`, which counts as equal to every provider, so independence fails closed.
   3. A hosted CLI with subscription or api_key billing → the manifest's provider (`claude_cli` → `anthropic`, `codex_cli` → `openai`).
+  4. A `manual_handoff` agent → the `provider` the user configures: a canonical provider (Antigravity → `google`) or `local` for a model the user runs on their own machine. ATLAS can't verify a manual run, so this is a recorded user declaration, like the model family.
+     - The imported result must declare `model` and `provider`. A provider that differs from the agent's configured one is rejected.
+     - With no configured provider, it is `unknown`, which fails independence closed.
+     - Results keep the `manual_imported` evidence label.
 - `agents.yaml` is edited only through the dashboard or `atlas agents …` (Phase 10). Like project config, a repository can never supply or change it.
 
 ### 3. Adapter manifests (declarative, vetted)

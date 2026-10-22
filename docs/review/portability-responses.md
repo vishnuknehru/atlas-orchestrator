@@ -23,3 +23,10 @@
 | P09 | MEDIUM | **Accepted.** how-to-use §5 defines a provider-neutral manual-handoff import contract (declared model → family → ADR-005); Gemini is scoped to the Antigravity profile | how-to-use §5 |
 | P11 | MEDIUM | **Accepted.** New append-only `agent_revisions`; `executions` snapshot agent_revision/provider/model_family; `review_rounds` store immutable reviewer/author provider and family; past gates use snapshots | database-design.md, ADR-005 |
 | P12 | MEDIUM | **Accepted.** Codex pinning policy is billing-specific: no provider override for subscription/api_key; exactly the configured local provider and endpoint for local; per-mode hostile-config fixtures | security-model §3.2 |
+
+## Round 3 (codex-portability-p3.json): changes_required; P05, P08, P09, P12 resolved
+
+| ID | Sev | Response | Where |
+|---|---|---|---|
+| P11 | MEDIUM | **Accepted.** `plans` snapshot author_provider, author_family and author_agent_revision at authoring, with authoring_execution_id as provenance. review_rounds copy author identity from plans or the authoring execution, never from the current registry | database-design.md |
+| P21 | MEDIUM | **Accepted.** Rule 4: a manual_handoff agent has a configured canonical provider or `local` (a recorded user declaration). The result must declare model + provider; a mismatch is rejected; missing = `unknown` (fail closed). Example profiles and the Antigravity result schema updated | ADR-007 §2, how-to-use §1.6/§5, antigravity-manual-handoff.md |

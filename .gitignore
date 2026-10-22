@@ -3,6 +3,7 @@ __pycache__/
 *.py[cod]
 .venv/
 .pytest_cache/
+.hypothesis/
 .mypy_cache/
 .ruff_cache/
 *.egg-info/
@@ -12,6 +13,7 @@ build/
 # Node
 node_modules/
 frontend/dist/
+*.tsbuildinfo
 playwright-report/
 test-results/
 

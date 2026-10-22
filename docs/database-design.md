@@ -121,11 +121,20 @@ CREATE TABLE repo_locks (                       -- one active code-changing phas
   FOREIGN KEY (phase_id, project_id) REFERENCES phases(id, project_id)
 );
 
-CREATE TABLE agents (
+CREATE TABLE agents (                        -- one row per registry agent (ADR-007); mutable runtime state
   id TEXT PRIMARY KEY, integration_mode TEXT NOT NULL,   -- headless|manual_handoff|blocked
+  adapter TEXT NOT NULL, current_revision INTEGER NOT NULL,
   cli_version TEXT, help_hash TEXT, capabilities_json TEXT NOT NULL,
   auth_status TEXT NOT NULL, capacity_state TEXT NOT NULL, capacity_reason TEXT,
   next_probe_at TEXT, last_success_at TEXT, updated_at TEXT NOT NULL
+);
+CREATE TABLE agent_revisions (               -- immutable snapshot of each registry change (ADR-007; append-only trigger)
+  agent_id TEXT NOT NULL REFERENCES agents(id), revision INTEGER NOT NULL,
+  adapter TEXT NOT NULL, billing TEXT NOT NULL CHECK (billing IN ('subscription','api_key','local','manual')),
+  provider TEXT NOT NULL,                      -- derived (ADR-007 §2): anthropic|openai|google|local|<canonical>|unknown
+  models_json TEXT NOT NULL, model_family_declared TEXT, endpoint TEXT, allow_remote_endpoint INTEGER NOT NULL DEFAULT 0,
+  manifest_hash TEXT, created_at TEXT NOT NULL,
+  PRIMARY KEY (agent_id, revision)
 );
 CREATE TABLE capacity_events (
   id TEXT PRIMARY KEY, agent_id TEXT NOT NULL REFERENCES agents(id),
@@ -136,6 +145,7 @@ CREATE TABLE executions (
   id TEXT PRIMARY KEY, project_id TEXT NOT NULL, task_id TEXT NOT NULL, phase_id TEXT, candidate_id TEXT,
   kind TEXT NOT NULL CHECK (kind IN ('agent','test','git','gh')),
   agent_id TEXT REFERENCES agents(id), role TEXT, model TEXT,
+  agent_revision INTEGER, provider TEXT, model_family TEXT,   -- effective identity snapshot (ADR-005/007); required when kind='agent'
   status TEXT NOT NULL, retry_count INTEGER NOT NULL DEFAULT 0,
   git_sha TEXT, argv_json TEXT NOT NULL,       -- redacted
   pid INTEGER, pgid INTEGER, pid_start_time TEXT, run_file TEXT, provider_session_id TEXT,
@@ -180,6 +190,8 @@ CREATE TABLE review_rounds (
   plan_id TEXT, candidate_id TEXT,
   kind TEXT NOT NULL,                          -- plan_challenge|code_review|qa|fix_verification
   reviewer_agent TEXT NOT NULL, reviewer_model TEXT, author_agent TEXT NOT NULL, author_model TEXT,
+  reviewer_provider TEXT NOT NULL, reviewer_family TEXT NOT NULL, reviewer_agent_revision INTEGER,
+  author_provider TEXT NOT NULL, author_family TEXT NOT NULL, author_agent_revision INTEGER,   -- immutable G-IND inputs
   verdict TEXT NOT NULL, evidence TEXT NOT NULL CHECK (evidence IN ('agent_reported','manual_imported')),
   criteria_json TEXT,                          -- QA: per-criterion status (validated complete; ATLAS-015)
   execution_id TEXT, cycle INTEGER NOT NULL, created_at TEXT NOT NULL,

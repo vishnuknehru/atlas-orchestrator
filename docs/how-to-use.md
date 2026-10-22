@@ -222,17 +222,22 @@ Only *executed* and *remote-verified* evidence count for tests, CI and merge.
 
 ---
 
-## 5. The Antigravity QA step (manual, D4 = wait) **[P4 minimal, P7 full]**
-Full runbook: [antigravity-manual-handoff.md](antigravity-manual-handoff.md). In short:
+## 5. The manual QA step (D4 = wait) **[P4 minimal, P7 full]**
+If your QA agent is a `manual_handoff` agent, ATLAS prepares a packet and waits for you. Every manual handoff uses the same import contract:
+- the result must declare the `model` you used;
+- ATLAS works out its family (built-in map, or the agent's declared `model_family`);
+- the result is accepted only if that family, and the agent's provider, are independent of the author (ADR-005).
+
+For example, in profile B (§1.6) any non-Qwen model is accepted. The steps below are for the **recommended Antigravity profile**, where the author is Codex (openai) and the reviewer is Claude (anthropic), so QA must use a **Gemini** model. Full runbook: [antigravity-manual-handoff.md](antigravity-manual-handoff.md). In short:
 1. A dashboard badge shows that QA is waiting (desktop notifications arrive in **[P9]**). Open the packet: `~/.atlas/handoffs/<project>/<execution>/`.
 2. In your terminal, `cd` into the QA worktree named in `packet.json`. Start Antigravity there with a **Gemini** model, in plan mode, using the prepared `PROMPT.md`.
 3. Don't edit source files. Ask Antigravity for the final JSON only, and save it as `result.json`.
-4. Import it: Dashboard → **Import Antigravity result**, or **[P7]** `atlas handoff import <path>/result.json`.
+4. Import it: Dashboard → **Import QA result**, or **[P7]** `atlas handoff import <path>/result.json`.
 5. ATLAS validates it:
    - the nonce matches;
    - the candidate is unchanged and the source is unmodified;
    - every acceptance criterion is answered;
-   - the model is Gemini;
+   - the declared model's family is independent of the author (Gemini, in this profile);
    - the verdict is consistent.
 
    If anything fails, it tells you exactly why.

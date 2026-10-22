@@ -13,3 +13,13 @@
 | P07 | MEDIUM | **Accepted.** D5 left unchanged: all Codex agents are blocked on public repos whatever the billing. Per-billing Codex table: `--oss` never for subscription/api_key, required for local | agent-compatibility §3.2/§6.2, ADR-004, ADR-007 §3 |
 | P08 | MEDIUM | **Partly accepted.** The cited "on behalf of their users" sentence is still on the page (retrieved 2026-10-22). Dated excerpts saved; ADR-004 now cites the explicit permission for end users signing in with their own subscription, the Commercial Terms conditions for hosted use, and the "ordinary, individual usage" note | evidence/claude-legal-compliance-2026-10-22.md, ADR-004 |
 | P09 | MEDIUM | **Accepted.** Minimum QA gate is provider-neutral; Antigravity is one manual-handoff profile; D4 kept | roadmap Phase 4, architecture §9, ADR-007 |
+
+## Round 2 (codex-portability-p2.json): changes_required; P01–P04, P06, P07 resolved
+
+| ID | Sev | Response | Where |
+|---|---|---|---|
+| P05 | MEDIUM | **Accepted.** Derivation precedence: `local` only for billing local + validated loopback (local + remote endpoint = config error); remote endpoints need a canonical declared provider, never the hostname; undeclared = `unknown`, which matches every provider (fail closed) | ADR-007 §2, ADR-005 |
+| P08 | MEDIUM | **Accepted.** ADR-004 assesses distributed self-hosted ATLAS against each product-integration condition, and records the open applicability question as R28, to be confirmed with Anthropic before any public release | ADR-004, risks R28 |
+| P09 | MEDIUM | **Accepted.** how-to-use §5 defines a provider-neutral manual-handoff import contract (declared model → family → ADR-005); Gemini is scoped to the Antigravity profile | how-to-use §5 |
+| P11 | MEDIUM | **Accepted.** New append-only `agent_revisions`; `executions` snapshot agent_revision/provider/model_family; `review_rounds` store immutable reviewer/author provider and family; past gates use snapshots | database-design.md, ADR-005 |
+| P12 | MEDIUM | **Accepted.** Codex pinning policy is billing-specific: no provider override for subscription/api_key; exactly the configured local provider and endpoint for local; per-mode hostile-config fixtures | security-model §3.2 |

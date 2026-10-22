@@ -57,10 +57,10 @@ agents: { architect: claude, challenger: codex, developer: codex, reviewer: clau
 
 - **The roles above are a recommended profile, not built-in rules.** The policy engine checks every assignment against the adapter's allowed roles and against ADR-005 independence.
 - A project whose roles can't be satisfied is shown as `BLOCKED(agent_config)`, with the reason.
-- Each agent has three separate identities, all recorded with every artifact: `agent_id` (the registry name), `provider` (who runs inference) and `model_family` (the model's lineage, ADR-005). The provider is derived, never typed by the user:
-  - from the manifest and billing for hosted agents: `anthropic`, `openai`, `google`;
-  - `local` for `billing: local`;
-  - the endpoint host for an opted-in remote endpoint.
+- Each agent has three separate identities, all snapshotted with every execution and review (database-design.md): `agent_id` (the registry name), `provider` (who runs inference) and `model_family` (the model's lineage, ADR-005). The provider is derived in this order, and the first rule that matches wins:
+  1. `billing: local` **and** an endpoint that passes the loopback check (§4) → `local`. `billing: local` with a non-loopback endpoint is a config error, rejected at validation.
+  2. A remote endpoint (`allow_remote_endpoint: true`) → the user must pick `provider` from ATLAS's fixed list of canonical providers (e.g. `anthropic`, `openai`, `google`, `mistral`, `deepseek`, `together`, `groq`, `openrouter`). The hostname is never used as the identity, because two hostnames can belong to one operator. A remote endpoint with no declared provider is `unknown`, which counts as equal to every provider, so independence fails closed.
+  3. A hosted CLI with subscription or api_key billing → the manifest's provider (`claude_cli` → `anthropic`, `codex_cli` → `openai`).
 - `agents.yaml` is edited only through the dashboard or `atlas agents …` (Phase 10). Like project config, a repository can never supply or change it.
 
 ### 3. Adapter manifests (declarative, vetted)

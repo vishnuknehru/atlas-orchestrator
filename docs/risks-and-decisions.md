@@ -34,6 +34,7 @@ Status: Phase 0 draft · 2026-10-22
 | R25 | User-added agent manifests or local models weaken review quality or bypass isolation | Medium | High | Unverified manifests limited to read-only roles and labelled; isolation flags need fixture tests to become verified; reviewer model shown on every gate; ADR-005 family rules unchanged (ADR-007) |
 | R26 | Source code leaks to a remote "local" endpoint | Low | High | Loopback-only check after DNS resolution on every request; remote needs per-agent opt-in and a dashboard warning (security-model.md §3.11) |
 | R27 | Linux platform divergence (sandbox, agent boundary, secret store) | Medium | Medium | Same VM boundary on both OSes; Linux `AgentBoundary` is a Phase 2 spike with fail-closed outcome; CI on both OSes from slice 1.1 |
+| R28 | Provider product-integration terms may apply to distributing ATLAS, not only to hosting it | Medium | Medium | ATLAS meets the stated conditions (ADR-004). Applicability is confirmed with Anthropic before any public release; OpenAI/Google terms are re-checked per new manifest |
 
 ## 2. Decisions requiring user approval
 

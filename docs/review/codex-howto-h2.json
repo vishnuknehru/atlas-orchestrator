@@ -1,0 +1,36 @@
+{
+  "verdict": "changes_required",
+  "summary": "H01–H08 are resolved. Three new MEDIUM issues remain: unsupported configuration keys, incorrect squash-merge verification wording, and omitted post-merge verification and rollback steps. No CRITICAL findings identified.",
+  "findings": [
+    {
+      "id": "ATLAS-H11",
+      "severity": "MEDIUM",
+      "category": "unsupported_configuration",
+      "file": "docs/how-to-use.md",
+      "location": "lines 79–100",
+      "description": "The project configuration example introduces exact keys that the approved design does not specify. Calling the example illustrative does not distinguish invented schema from approved configuration, especially when the guide says unknown keys are rejected.",
+      "evidence": "docs/how-to-use.md:93–97 supplies tests.setup_command, tests.setup_network, tests.registries and tests.commands. docs/security-model.md:141 explicitly specifies tests.writable_paths, while lines 204–209 specify setup networking behaviour without approving these configuration key names. docs/architecture.md:132–146 supplies approved configuration defaults and requires unknown keys to be rejected.",
+      "recommendation": "Remove unsupported key names or explicitly mark those portions as proposed schema requiring a design decision. Describe approved setup and test behaviour in prose until its configuration schema is approved."
+    },
+    {
+      "id": "ATLAS-H12",
+      "severity": "MEDIUM",
+      "category": "design_contradiction",
+      "file": "docs/how-to-use.md",
+      "location": "line 148",
+      "description": "The manual-merge instructions say the merged commit must equal the candidate commit. The approved squash-merge workflow produces a separate merge commit; verification compares the PR head at merge with the candidate instead. The guide therefore incorrectly implies that a normal squash merge will be blocked.",
+      "evidence": "docs/how-to-use.md:148 says ATLAS checks that 'the merged commit is exactly the reviewed candidate'. docs/github-integration.md:33 specifies --squash, lines 34–35 distinguish headRefOid verification from mergeCommit reachability, and docs/workflow-state-machine.md:160 defines G-MERGED using headRefOid at merge == candidate commit SHA while recording mergeCommit.oid separately.",
+      "recommendation": "State that the PR head at merge must equal the reviewed candidate, with the expected repository and base branch, and that ATLAS separately records and verifies reachability of the resulting merge commit."
+    },
+    {
+      "id": "ATLAS-H13",
+      "severity": "MEDIUM",
+      "category": "missing_operational_caveat",
+      "file": "docs/how-to-use.md",
+      "location": "lines 141–142",
+      "description": "The phase walkthrough moves directly from merge confirmation to the next phase without explaining post-merge base CI or the user's rollback decision. Users need to know that a successfully merged phase can still require intervention before completion and dependent work.",
+      "evidence": "docs/how-to-use.md:141–142 lists 'Merge + verify' as candidate confirmation followed by 'Next phase'. docs/workflow-state-machine.md:95–101 requires POST_MERGE_VERIFICATION, completion only when base CI is green or verification is disabled, and ROLLBACK_PROPOSED on red base CI. Lines 105 and 52 explain the full-pipeline revert and the effect of rollback on dependent phases.",
+      "recommendation": "Add post-merge base-CI verification and the approve/decline rollback step. Explain that an approved rollback uses a revert phase through the full pipeline and that dependent phases require re-planning or cancellation after rollback."
+    }
+  ]
+}

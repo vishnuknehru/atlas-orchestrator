@@ -1,0 +1,86 @@
+{
+  "verdict": "changes_required",
+  "summary": "The planned-status disclaimer is clear, but the guide contains design contradictions, premature phase claims, and missing operational caveats. No CRITICAL findings identified.",
+  "findings": [
+    {
+      "id": "ATLAS-H01",
+      "severity": "HIGH",
+      "category": "design_contradiction",
+      "file": "docs/how-to-use.md",
+      "location": "lines 21 and 208",
+      "description": "The blanket claim that ATLAS never reads GitHub credentials contradicts the approved PAT integration.",
+      "evidence": "The guide says it 'never reads their credentials' and won't 'read or copy ... GitHub credentials'. docs/github-integration.md:86-88 explicitly requires ATLAS to read the project's PAT from Keychain and inject it as GH_TOKEN into gh/git subprocesses.",
+      "recommendation": "Distinguish untouched provider credentials and the unused broad gh login from the project PAT that ATLAS deliberately reads and passes to GitHub-service subprocesses."
+    },
+    {
+      "id": "ATLAS-H02",
+      "severity": "HIGH",
+      "category": "unsupported_workflow",
+      "file": "docs/how-to-use.md",
+      "location": "line 65",
+      "description": "The guide presents Claude plus Antigravity as a supported public-repository workflow, although no such replacement workflow is approved.",
+      "evidence": "Line 65 says public projects 'need Claude + Antigravity only'. docs/risks-and-decisions.md:43 says to revisit D5 if a public repository is registered. docs/architecture.md:142 disables substitution by default; docs/adr/ADR-005-review-independence.md:11-17 requires independent providers and blocks when independence cannot be met. The default Codex developer and challenger therefore cannot simply disappear.",
+      "recommendation": "Say public repositories block Codex and may block the workflow pending a new decision and a valid independent role assignment."
+    },
+    {
+      "id": "ATLAS-H03",
+      "severity": "MEDIUM",
+      "category": "design_contradiction",
+      "file": "docs/how-to-use.md",
+      "location": "lines 175-177",
+      "description": "The unconditional promise that nothing resumes after restart omits the approved Phase 6 auto-resume option.",
+      "evidence": "Line 176 says 'Everything comes back paused, nothing resumes by itself'. docs/implementation-roadmap.md:93-95 introduces recovery.auto_resume in Phase 6; docs/recovery-strategy.md:132 and 146 make mandatory manual Resume conditional on that option and implementation phase.",
+      "recommendation": "Describe manual Resume as the default and mandatory before Phase 6, with an explicit caveat for recovery.auto_resume."
+    },
+    {
+      "id": "ATLAS-H04",
+      "severity": "MEDIUM",
+      "category": "missing_manual_step",
+      "file": "docs/how-to-use.md",
+      "location": "lines 67 and 129-132",
+      "description": "The delivery instructions omit the required GitHub manual-merge path, particularly for merge-queue repositories.",
+      "evidence": "The table presents ATLAS approval followed by ATLAS merge as the normal universal sequence. docs/implementation-roadmap.md:87-88 keeps merge_queue_support off and specifies 'user merges, ATLAS verifies' for merge-queue and unknown-protection repositories. docs/github-integration.md:10-11 and 65 describes that manual path.",
+      "recommendation": "Explain when the user must merge on GitHub, that GitHub approvals remain required, and that ATLAS subsequently verifies the candidate head."
+    },
+    {
+      "id": "ATLAS-H05",
+      "severity": "MEDIUM",
+      "category": "phase_mismatch",
+      "file": "docs/how-to-use.md",
+      "location": "lines 62-68 and 146-148",
+      "description": "Several capabilities are promised earlier than their roadmap phases.",
+      "evidence": "Section 2 is tagged P1 but includes branch-protection discovery at line 67; docs/implementation-roadmap.md:29 limits P1 registration to a record and gh repo view, while lines 86-87 assign protection discovery to P5. Section 5 is tagged P4 minimal/P7 full and promises a notification at line 148; roadmap lines 107-108 place notifications in P9, and docs/antigravity-manual-handoff.md:20 explicitly tags macOS notifications P9.",
+      "recommendation": "Tag protection discovery P5 and notifications P9 separately from basic registration and the manual-QA gate."
+    },
+    {
+      "id": "ATLAS-H06",
+      "severity": "MEDIUM",
+      "category": "missing_limits",
+      "file": "docs/how-to-use.md",
+      "location": "lines 49-58 and 181-190",
+      "description": "The sandbox setup and troubleshooting omit major project compatibility limits.",
+      "evidence": "The guide lists submodules, LFS and unsafe symlinks, but omits macOS-only toolchains, tests requiring tracked-source mutation, and network-dependent tests. docs/security-model.md:204 requires tests to use network none and makes tests.network unavailable; lines 258-260 block macOS toolchains and source-mutating tests. docs/implementation-roadmap.md:75 repeats these release limits.",
+      "recommendation": "List these constraints before project setup, distinguish dependency-setup egress from test networking, and explain that no automatic host-test fallback exists."
+    },
+    {
+      "id": "ATLAS-H07",
+      "severity": "MEDIUM",
+      "category": "missing_caveat",
+      "file": "docs/how-to-use.md",
+      "location": "lines 146-161",
+      "description": "Indefinite waiting is described without explaining that the QA packet and worktree expire.",
+      "evidence": "Line 161 says ATLAS waits indefinitely, while docs/antigravity-manual-handoff.md:247 sets default packet expiry to 72 hours and requires regeneration with a new nonce. That document's line 61 says the QA worktree is removed after import or expiry.",
+      "recommendation": "Distinguish indefinite workflow waiting from packet lifetime and instruct users to regenerate expired packets before running or importing QA."
+    },
+    {
+      "id": "ATLAS-H08",
+      "severity": "MEDIUM",
+      "category": "inaccurate_security_claim",
+      "file": "docs/how-to-use.md",
+      "location": "lines 212-213",
+      "description": "The closing security guarantees are broader than the approved boundaries and omit accepted residual trust.",
+      "evidence": "Line 212 promises no repository code outside Docker, although developer agents operate in host worktrees under their own boundaries (docs/implementation-roadmap.md:39-41 and docs/security-model.md:242-244). Line 213 permits destinations only at providers and GitHub, but docs/security-model.md:205-209 permits approved dependency registries. docs/security-model.md:268-270 and docs/risks-and-decisions.md:47 explicitly acknowledge that provider CLI processes can read user files.",
+      "recommendation": "Scope the Docker guarantee to ATLAS-run tests and setup, include approved registry egress, and disclose the accepted trust in provider CLI processes."
+    }
+  ]
+}

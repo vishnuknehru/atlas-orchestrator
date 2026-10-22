@@ -9,6 +9,7 @@ ATLAS is a local-first macOS application. It coordinates official AI coding-agen
 
 | Document | Purpose |
 |---|---|
+| [how-to-use.md](docs/how-to-use.md) | **How to use ATLAS** (planned usage, tagged by delivery phase) |
 | [architecture.md](docs/architecture.md) | Components, process model, trust boundaries |
 | [agent-compatibility.md](docs/agent-compatibility.md) | Verified per-provider capability matrix and command templates |
 | [antigravity-manual-handoff.md](docs/antigravity-manual-handoff.md) | Runbook for the manual Antigravity step |

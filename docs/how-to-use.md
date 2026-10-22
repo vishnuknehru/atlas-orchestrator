@@ -8,32 +8,41 @@ LangGraph is ATLAS's **internal** workflow engine (ADR-001, ADR-006). You never 
 
 ## 1. One-time setup
 
-### 1.1 Tools (already present on this Mac, verified 2026-10-22)
+ATLAS runs on **macOS or Linux** (D13). Each person installs their own copy and uses their own accounts and models (ADR-007). Windows isn't supported yet; WSL2 may come later.
+
+### 1.1 Prerequisites
 | Tool | Why | Check |
 |---|---|---|
-| Claude Code (`claude`) | Architect, reviewer | `claude --version`; signed in with your Claude subscription |
-| OpenAI Codex (`codex`) | Developer, challenger | `codex login status` → "Logged in using ChatGPT" |
-| Antigravity (`agy` / IDE) | QA, **run by you** (manual handoff) | `agy models` |
-| `git`, `gh` | Repository and GitHub operations | `gh auth status` |
+| `git`, `gh` | Repository and GitHub operations | `gh --version` |
 | Python 3.12, `uv`, Node 24 | ATLAS itself | `python3.12 --version` |
-| Colima + Docker CLI | Test sandbox (D11) | `colima version` |
+| Colima + Docker CLI | Test sandbox (D11). On Linux, also QEMU + KVM | `colima version` |
+| A secret store | macOS Keychain (built in) or, on Linux, a Secret Service provider such as GNOME Keyring or KWallet | — |
+| **At least two agents from different model families** | They fill the roles. Reviews must come from a different family than the author (ADR-005). See §1.6 | per agent |
 
-ATLAS never signs in to these agent tools for you, and never reads their credentials (Claude, Codex, Antigravity). The **only** credential ATLAS reads is the per-project GitHub PAT you store for it (§1.3), and it passes that only to its own `git`/`gh` processes. If one of them logs out, ATLAS pauses that agent and tells you which command to run.
+ATLAS never signs in to agent tools for you, and never reads the logins those CLIs manage. ATLAS reads only two kinds of credential, both from your OS secret store:
+- the per-project GitHub PAT (§1.3), passed only to its own `git`/`gh` processes;
+- an API key, but only for an agent you set to `billing: api_key` (§1.5), passed only to that agent's process.
+
+If an agent logs out, ATLAS pauses it and tells you which command to run.
 
 ### 1.2 Install and start ATLAS **[P1]**
 ```bash
-git clone https://github.com/vishnuknehru/atlas-orchestrator.git
+git clone https://github.com/<owner>/atlas-orchestrator.git   # the URL of the ATLAS repository
 cd atlas-orchestrator && uv sync          # exact install steps finalised in Phase 1 / Phase 10
 atlas serve                               # starts ATLAS on 127.0.0.1 and opens the dashboard
 ```
 - The dashboard runs only on your machine (`127.0.0.1`), protected by a per-install session token.
-- Data lives in `~/.atlas/` (databases, logs, artefacts). Phase 10 adds an optional `launchd` service so ATLAS starts at login.
+- Data lives in `~/.atlas/` (databases, logs, artefacts). Phase 10 adds an optional login service: `launchd` on macOS, a `systemd --user` unit on Linux.
 
 ### 1.3 GitHub token per project (D3) **[P1 checks, P5 use]**
-Store your PAT in the macOS Keychain under ATLAS's name for the project. The `-w` with no value makes `security` prompt for it without echoing:
+Store your PAT in the OS secret store under ATLAS's name for the project. Both commands prompt for the token without echoing it:
 ```bash
+# macOS (Keychain)
 security add-generic-password -s "atlas.<project_id>.github" -a "<your-github-user>" -w
+# Linux (Secret Service)
+secret-tool store --label="ATLAS GitHub <project_id>" service "atlas.<project_id>.github" username "<your-github-user>"
 ```
+**[P10]** `atlas secrets set github <project_id>` does the same on either OS.
 - Required permissions on that repository:
   - **Contents:** read/write
   - **Pull requests:** read/write
@@ -47,11 +56,13 @@ security add-generic-password -s "atlas.<project_id>.github" -a "<your-github-us
 - You can check a token yourself at any time with the verification script (it never prints the token).
 
 ### 1.4 Test sandbox (D11) **[P4]**
-Tests run only inside Docker containers on a dedicated Colima VM. One-time steps (exact flags confirmed in Phase 4):
-1. **Reserve disk space** with a dedicated APFS volume (admin rights needed; find your container ID with `diskutil apfs list`):
-   ```bash
-   sudo diskutil apfs addVolume <container> APFS AtlasSandbox -reserve 80g -quota 80g
-   ```
+Tests run only inside Docker containers on a dedicated Colima VM, on both macOS and Linux. One-time steps (exact flags confirmed in Phase 4):
+1. **Reserve disk space** for the VM (admin rights needed):
+   - **macOS:** a dedicated APFS volume (find your container ID with `diskutil apfs list`):
+     ```bash
+     sudo diskutil apfs addVolume <container> APFS AtlasSandbox -reserve 80g -quota 80g
+     ```
+   - **Linux:** a dedicated partition or fixed-size LVM logical volume (e.g. 80 GB), mounted where ATLAS's Settings page says.
 2. **Start the ATLAS VM** with its data on that volume and **no host folders shared**. ATLAS shows the exact command in the dashboard (Settings → Test sandbox), and refuses to run tests if the VM can see any host folder.
 3. **Approve test images.** For each project, choose a pinned image, e.g. `python:3.12@sha256:…`. ATLAS lists the digest; you approve it once.
 
@@ -66,11 +77,57 @@ Check these before registering a project:
 - **No network during tests.** Dependency *installation* may use approved registries through ATLAS's allowlist proxy. Tests themselves always run with no network, so integration tests that call external services aren't supported yet.
 - **No Git submodules, no Git LFS**, and no symlinks that point outside the repo.
 - **No repository Dockerfile builds.** Use an approved, digest-pinned public image.
-- **No fallback to running tests on your Mac.** If a project doesn't fit these rules, its testing is blocked (fail closed).
+- **No fallback to running tests directly on your machine.** If a project doesn't fit these rules, its testing is blocked (fail closed).
+
+## 1.6 Configure your agents **[P1 schema, P2 adapters, P10 CLI]**
+You list the agents you have in `~/.atlas/agents.yaml`, through the dashboard (Settings → Agents) or **[P10]** `atlas agents add`. Projects then assign roles to those agents. The full design is in ADR-007.
+
+| Adapter | Use it for | Roles |
+|---|---|---|
+| `claude_cli`, `codex_cli` (built-in, verified) | Claude Code, or Codex with ChatGPT sign-in, an API key or a local OSS provider | Any role the manifest allows |
+| `manual_handoff` (built-in) | A tool you run yourself, e.g. Antigravity | QA, or any read-only role |
+| `openai_compatible_http` | A local model server (Ollama, LM Studio, vLLM, `llama-server`) | **Read-only roles only** (challenger, reviewer) |
+| A manifest you add yourself | Another agent CLI | Read-only roles until it becomes `verified` through an ATLAS PR |
+
+**Billing** is set per agent and never changes on its own:
+- `subscription`: the CLI's own login.
+- `local`: your own model server.
+- `api_key`: you store the key with **[P10]** `atlas secrets set <agent_id>` (until then, the OS commands in §1.3 with service `atlas.agent.<agent_id>`). Only that agent's process receives it.
+
+If a subscription runs out, ATLAS pauses. It never moves the work to a paid API agent.
+
+**Example A: Claude + Codex + Antigravity** (the recommended profile)
+```yaml
+agents:
+  claude:      { adapter: claude_cli, models: [<claude model>], billing: subscription }
+  codex:       { adapter: codex_cli,  models: [<codex model>],  billing: subscription }
+  antigravity: { adapter: manual_handoff, declared_family_required: true }
+# project roles: architect claude · challenger codex · developer codex · reviewer claude · qa antigravity
+```
+
+**Example B: fully local, open-weight models** (no subscriptions)
+```yaml
+agents:
+  local-coder:    { adapter: codex_cli, models: [qwen3-coder], model_family: alibaba,
+                    billing: local, endpoint: "http://127.0.0.1:11434/v1" }
+  local-reviewer: { adapter: openai_compatible_http, models: [llama-4-maverick], model_family: meta,
+                    billing: local, endpoint: "http://127.0.0.1:11434/v1" }
+  manual-qa:      { adapter: manual_handoff, declared_family_required: true }
+# project roles: architect local-coder · challenger local-reviewer · developer local-coder
+#                reviewer local-reviewer · qa manual-qa (you run QA with a non-Qwen model)
+```
+
+Rules ATLAS enforces for any profile:
+- The reviewer, challenger and QA must be a different agent **and** a different model family from the author (ADR-005).
+- Unknown families block until you declare `model_family`.
+- A profile that can't satisfy a role shows `BLOCKED(agent_config)`.
+- Model servers must be on `127.0.0.1` unless you set `allow_remote_endpoint: true` for that agent. The dashboard then warns that code leaves your machine.
+- Gate results show which model reviewed the change. A small local model is allowed, but you can see what you're relying on.
+- Model ids above are examples. Pin the ones you actually run (D10).
 
 ## 2. Register a project **[P1 record; P5 protection discovery; P4 test config]**
 Dashboard → **Projects → Register repository**:
-1. Enter `owner/name`, e.g. `vishnuknehru/my-app`. ATLAS checks access, visibility and default branch.
+1. Enter `owner/name`, e.g. `<your-github-user>/my-app`. ATLAS checks access, visibility and default branch.
    - Public repositories: Codex is blocked (D5), and the default roles use Codex. A public project is therefore **blocked** until you make a new decision about a valid independent role assignment (ADR-005). You currently work only on private repos.
    - A repository can be registered only once.
 2. **[P5]** ATLAS reads branch protection. If it can't, it asks you to declare the required CI checks and approvals; otherwise ATLAS will never merge on that project, and you merge on GitHub yourself (§4).
@@ -80,14 +137,14 @@ Dashboard → **Projects → Register repository**:
 # Only keys defined in the approved design are shown; unknown keys are rejected.
 project:
   name: my-app
-  repository: vishnuknehru/my-app
+  repository: <your-github-user>/my-app
   base_branch: main
-agents:                      # defaults; reviewer must differ from the author (ADR-005)
+agents:                      # ids from your agents.yaml (§1.6); reviewer must differ from the author (ADR-005)
   architect: claude
   challenger: codex
   developer: codex
   reviewer: claude
-  qa: antigravity_manual     # you run Antigravity yourself (ADR-003)
+  qa: antigravity            # manual_handoff: you run Antigravity yourself (ADR-003)
 tests:                       # [P4]
   writable_paths: [".venv", ".pytest_cache"]   # approved key (security-model.md §5.1.3); must not overlap tracked files
 ci:
@@ -129,12 +186,12 @@ The task screen shows the current phase and its state. For each phase:
 | Step | Who | What you see | What you do |
 |---|---|---|---|
 | Prepare | ATLAS | New branch `atlas/…` in an isolated worktree | — |
-| Implement | Codex | Live log; then a **candidate commit** (`r1`) | — |
+| Implement | Developer agent (e.g. Codex) | Live log; then a **candidate commit** (`r1`) | — |
 | Protected-path check | ATLAS | If the change touches CI workflows, secrets, agent config or destructive DB migrations: **approval request** | Approve or reject each violation kind |
 | Test | ATLAS (Docker) | Tests **executed** on the candidate, with results | — |
-| Code review | Claude | Findings with severity, file, line, evidence | Read. CRITICAL and HIGH block until fixed and re-verified |
-| Fix loop | Codex → Claude | New candidate `r2`… Old evidence is marked stale | — (stops after 3 attempts → BLOCKED) |
-| QA | **You + Antigravity** | ⏸ **AWAITING_MANUAL** + a handoff packet | See §5 |
+| Code review | Reviewer agent (e.g. Claude) | Findings with severity, file, line, evidence | Read. CRITICAL and HIGH block until fixed and re-verified |
+| Fix loop | Developer → reviewer | New candidate `r2`… Old evidence is marked stale | — (stops after 3 attempts → BLOCKED) |
+| QA | QA agent; with the recommended profile, **you + Antigravity** | ⏸ **AWAITING_MANUAL** + a handoff packet | See §5 |
 | Push + PR | ATLAS | PR link | Optional: review on GitHub |
 | CI | GitHub | Required checks on the exact candidate commit | — |
 | **Merge** | **You (D6)** | **Approve merge** button, with the evidence summary. GitHub's own required approvals still apply; an AI review never counts | Approve, or leave it |
@@ -164,7 +221,7 @@ Only *executed* and *remote-verified* evidence count for tests, CI and merge.
 
 ## 5. The Antigravity QA step (manual, D4 = wait) **[P4 minimal, P7 full]**
 Full runbook: [antigravity-manual-handoff.md](antigravity-manual-handoff.md). In short:
-1. A dashboard badge shows that QA is waiting (macOS notifications arrive in **[P9]**). Open the packet: `~/.atlas/handoffs/<project>/<execution>/`.
+1. A dashboard badge shows that QA is waiting (desktop notifications arrive in **[P9]**). Open the packet: `~/.atlas/handoffs/<project>/<execution>/`.
 2. In your terminal, `cd` into the QA worktree named in `packet.json`. Start Antigravity there with a **Gemini** model, in plan mode, using the prepared `PROMPT.md`.
 3. Don't edit source files. Ask Antigravity for the final JSON only, and save it as `result.json`.
 4. Import it: Dashboard → **Import Antigravity result**, or **[P7]** `atlas handoff import <path>/result.json`.
@@ -202,7 +259,8 @@ ATLAS waits for you indefinitely (D4), and other projects keep running in the me
 |---|---|---|
 | `AWAITING_MANUAL` | Antigravity QA is waiting for you | §5 |
 | `AWAITING_APPROVAL` | A plan, merge or protected-path change needs you | Approve or reject in the dashboard |
-| `PAUSED (capacity)` | An agent hit its subscription limit or logged out | Wait for the limit to reset, or sign in again (`claude`, `codex login`). ATLAS never switches to paid API use |
+| `PAUSED (capacity)` | An agent hit its subscription limit, logged out, or its local model server isn't reachable | Wait for the limit to reset, sign in again (e.g. `claude`, `codex login`), or start your model server. ATLAS never switches to paid API use on its own |
+| `BLOCKED(agent_config)` | No configured agent can fill a role independently | Add an agent from another model family, or change the project's roles (§1.6) |
 | `BLOCKED(no_test_sandbox)` | Colima isn't running, host folders are visible, the image isn't approved, or the self-test failed | Follow the message in Settings → Test sandbox |
 | `BLOCKED(github_credential)` | PAT missing or under-privileged | §1.3 |
 | `BLOCKED(repair_budget_exhausted)` | Fixes failed 3 times | Read the findings and logs; re-plan or cancel |
@@ -223,10 +281,10 @@ ATLAS produces a **final report** covering:
 It states plainly any step that was manual or not fully autonomous, for example Antigravity QA.
 
 ## 9. What ATLAS will not do
-- It won't use API keys or paid API credits, or switch billing.
-- It won't read or copy your Claude, Codex or Antigravity credentials, and it doesn't use your broad `gh` login. It reads only the per-project PAT you stored for it, and passes that only to its own GitHub `git`/`gh` subprocesses, never to agents or tests.
+- It won't use API keys or paid API credits unless you set that agent to `billing: api_key`, and it never switches an agent's billing on its own.
+- It won't read or copy the logins your agent CLIs manage (Claude, Codex, Antigravity, others), and it doesn't use your broad `gh` login. It reads only what you stored for it: the per-project PAT, passed only to its own GitHub `git`/`gh` subprocesses, and any per-agent API key, passed only to that agent. Neither ever reaches tests.
 - It won't launch Antigravity for you.
 - It won't merge without your approval (D6), or merge anything other than the reviewed and tested candidate commit.
 - It won't push to `main`, force-push protected branches, bypass branch protection, or treat an AI review as a GitHub approval.
 - It won't run tests or dependency setup outside the Docker sandbox. Developer agents (Codex, Claude) do edit and inspect code in host worktrees, inside their own CLI sandboxes and ATLAS's agent wrapper. You accepted that the agent CLIs themselves run as you (D9).
-- It won't send data anywhere except the agent CLIs' own providers, GitHub, and (during dependency setup only) the package registries you approved for a project. LangGraph tracing is off.
+- It won't send data anywhere except your configured agents' providers (or your local model servers), GitHub, and (during dependency setup only) the package registries you approved for a project. LangGraph tracing is off.

@@ -1,18 +1,20 @@
 # ATLAS Architecture
 
-Status: Phase 0 draft · Date: 2026-10-22 · Owner: Lead architect (Claude Code), challenger: Codex
+Status: Phase 0 draft (portability amendment, ADR-007) · Date: 2026-10-22 · Owner: Lead architect (Claude Code), challenger: Codex
 
 ## 1. Goals and non-goals
 
 **Goals**
 - Turn a high-level software request into a phased, dependency-ordered plan. Execute it one phase at a time, through gated stages: plan, challenge, implement, test, review, QA, commit, PR, merge, checkpoint.
-- Use only official, subscription-authenticated agent interfaces. Never touch provider credentials.
+- Use only official agent interfaces from a user-configured registry (ADR-007): subscription CLIs, local/open-weight models through agent CLIs or a loopback OpenAI-compatible endpoint, or an explicitly opted-in API key. Never touch subscription credentials that CLIs manage.
+- Be portable: anyone can self-host ATLAS on macOS or Linux with the agents they have (D13).
 - Survive crashes, restarts and quota exhaustion without duplicating external side effects.
 - Isolate projects from each other: repo, config, queue, state, worktrees, agent context.
 - Never report an action that did not happen.
 
 **Non-goals (first release)**
-- Hosting ATLAS for other people. ATLAS is a single-user local tool; see ADR-004.
+- Hosting ATLAS for other people. ATLAS is self-hosted and single-operator: each person runs their own copy with their own accounts (ADR-004, ADR-007).
+- Native Windows (WSL2 may come later, D13).
 - Running several code-changing phases in one repository at the same time.
 - Production deployment. ATLAS stops at "merged + verified CI". Deployment verification is a pluggable, opt-in hook.
 - Automating Google Antigravity (ADR-003).
@@ -28,6 +30,8 @@ flowchart LR
   api --> fs[(Artifact store\n~/.atlas/artifacts)]
   api -->|subprocess argv| claude[claude CLI\nsubscription OAuth]
   api -->|subprocess argv| codex[codex CLI\nChatGPT sign-in]
+  api -->|subprocess argv| other[other agent CLIs\nvetted manifests]
+  api -->|HTTP, loopback| local[local model server\nread-only roles]
   api -->|subprocess argv| git[git CLI]
   api -->|subprocess argv| gh[gh CLI]
   gh --> github[(GitHub)]
@@ -35,7 +39,7 @@ flowchart LR
   agyUser -->|result.json import| api
 ```
 
-ATLAS never runs `agy`. The user does, and imports the result (see [antigravity-manual-handoff.md](antigravity-manual-handoff.md)).
+The agents shown are the recommended profile; the user's registry decides which exist (ADR-007). ATLAS never runs `agy`. The user does, and imports the result (see [antigravity-manual-handoff.md](antigravity-manual-handoff.md)).
 
 ## 3. Process model
 
@@ -46,10 +50,10 @@ A single Python 3.12 process (`atlas serve`) contains:
 | **API layer** (FastAPI) | REST endpoints and SSE event stream for the dashboard. Binds to `127.0.0.1` only and requires a per-install session token. |
 | **Workflow engine (LangGraph)** | Runs the task and phase graphs with durable SQLite checkpoints (`~/.atlas/graph.db`, `durability="sync"`), retries, and `interrupt()` pauses for approvals, CI waits and manual handoffs. It holds *where execution is*, never *what is true*. See [ADR-006](adr/ADR-006-langgraph-engine.md). |
 | **Orchestrator** | The only component allowed to change workflow state. Graph nodes call it to apply validated FSM transitions inside app-DB transactions, and graph routing functions call the policy engine. Reads gate policy from config, never from agent output. |
-| **Scheduler** | Chooses the next runnable phase across projects: priority, dependency satisfaction, repo lock, agent capacity. Default concurrency is one code-changing phase per repo and one global agent invocation per provider. |
+| **Scheduler** | Chooses the next runnable phase across projects: priority, dependency satisfaction, repo lock, agent capacity. Default concurrency is one code-changing phase per repo and one global agent invocation per registry agent. |
 | **Supervisor** | asyncio task that spawns and monitors subprocesses: agents, git, gh, test commands. Records PID, process start time, process group, and stdout/stderr artifact files. Enforces timeouts and sends SIGINT → SIGTERM → SIGKILL in that order. |
-| **Agent adapters** | One per provider. Build an argv from a vetted template, parse output into typed results, and classify failures into capacity states. Never interpret agent text as instructions to ATLAS. |
-| **Capacity manager** | Tracks per-provider state (AVAILABLE, BUSY, RATE_LIMITED, QUOTA_EXHAUSTED, AUTHENTICATION_REQUIRED, PROVIDER_UNAVAILABLE, UNKNOWN, MANUAL_ONLY). Runs bounded backoff and cheap auth probes. |
+| **Agent adapters** | One per registry agent, built from a vetted adapter manifest (ADR-007 §3). Build an argv from a vetted template, parse output into typed results, and classify failures into capacity states. Never interpret agent text as instructions to ATLAS. |
+| **Capacity manager** | Tracks per-agent state (AVAILABLE, BUSY, RATE_LIMITED, QUOTA_EXHAUSTED, AUTHENTICATION_REQUIRED, PROVIDER_UNAVAILABLE, UNKNOWN, MANUAL_ONLY). Runs bounded backoff and cheap auth probes. |
 | **Repository service** | Clone, fetch, worktree add/remove, branch, diff, commit, reconciliation. Wraps git only; it is not an agent. |
 | **GitHub service** | Wraps `gh` for PR, checks, reviews and merge. Every mutating call goes through the outbox (see [recovery-strategy.md](recovery-strategy.md)). |
 | **Test runner** | Runs project-configured test commands at the candidate commit, **inside the enforced test sandbox** (security-model.md §5.1; fails closed if unavailable), and captures structured results. These are the *executed* results, distinct from what an agent reports. |
@@ -58,7 +62,7 @@ A single Python 3.12 process (`atlas serve`) contains:
 | **Recovery service** | Runs at startup before the scheduler. Reconciles DB state against git, GitHub and processes. |
 | **Audit/log** | Structured JSON logs with correlation IDs, an append-only `transitions` table and `audit_log` table, and secret redaction. |
 
-There is no Redis, broker or Postgres. A single process with SQLite is enough at this scale (ADR-002). LangGraph runs in-process as a library (ADR-001, ADR-006). `launchd` keeps it running (Phase 10).
+There is no Redis, broker or Postgres. A single process with SQLite is enough at this scale (ADR-002). LangGraph runs in-process as a library (ADR-001, ADR-006). `launchd` (macOS) or a `systemd --user` unit (Linux) keeps it running (Phase 10).
 
 ## 4. Data and directory layout
 
@@ -67,11 +71,12 @@ There is no Redis, broker or Postgres. A single process with SQLite is enough at
   atlas.db                 # SQLite WAL app DB: the source of truth (global + per-project rows, project_id FK everywhere)
   graph.db                 # LangGraph checkpoints: execution position only (0600, never readable by sandboxes)
   config.yaml              # global config (non-secret)
+  agents.yaml              # agent registry (non-secret; ADR-007 §2)
   projects/<project_id>/
     project.yaml           # project config (copied from user input; repo copy is NOT trusted)
     repo/                  # primary clone (never edited directly; base for worktrees)
   worktrees/<project_id>/<phase_id>/   # developer worktree, one per active phase (agents only; never used for evidence)
-  sandboxes/<execution_id>/            # per run: QA verification worktree (wt/) or the extracted, validated /out of a test container (nothing on the host is mounted into the Colima VM)
+  sandboxes/<execution_id>/            # per run: QA verification worktree (wt/) or the extracted, validated /out of a test container (nothing on the host is mounted into the sandbox VM)
   snapshots/<execution_id>/            # preserved index/worktree state before any reset
   run/<execution_id>.json              # launcher run files (process discovery)
   artifacts/<sha256>       # content-addressed blobs: prompts, agent output, diffs, logs, test reports
@@ -79,7 +84,9 @@ There is no Redis, broker or Postgres. A single process with SQLite is enough at
   logs/atlas.jsonl
 ```
 
-Secrets are kept outside this tree. Phase 1+ stores ATLAS-managed secrets, such as an optional per-project fine-grained GitHub PAT, in the macOS Keychain under the service name `atlas.<project_id>.github`.
+Secrets are kept outside this tree. Phase 1+ stores ATLAS-managed secrets in the OS secret store through the `SecretStore` interface (macOS Keychain, Linux Secret Service; ADR-007 §6):
+- the per-project GitHub PAT under `atlas.<project_id>.github`;
+- API keys for agents the user set to `billing: api_key` under `atlas.agent.<agent_id>` (D15).
 
 ## 5. The delivery pipeline (per phase)
 
@@ -122,7 +129,7 @@ Gates accept only `executed` or `remote_verified` evidence for tests, CI and mer
 ## 7. Trust boundaries
 
 1. **User ↔ ATLAS.** Trusted. Localhost UI with a token.
-2. **ATLAS ↔ agent CLIs.** The CLI binaries are trusted as published. Their *output* is untrusted data. Agents run with cwd set to the phase worktree, with a scrubbed env (no `GH_TOKEN`, no ATLAS secrets) and restrictive permission flags.
+2. **ATLAS ↔ agents.** CLI binaries with a `verified` manifest are trusted as published; `unverified` ones are limited to read-only roles. Local model servers are trusted only to return text. Their *output* is untrusted data. Agents run with cwd set to the phase worktree, with a scrubbed env (no `GH_TOKEN`, no ATLAS secrets) and restrictive permission flags.
 3. **ATLAS ↔ repository content.** Untrusted. This includes READMEs, `AGENTS.md`/`CLAUDE.md`, `.claude/`, `.codex/`, `.mcp.json`, issues, CI logs and PR comments. ATLAS policy never comes from repo content (see [security-model.md](security-model.md)).
 4. **ATLAS ↔ GitHub.** Authenticated through gh. Mutations are idempotent and reconciled.
 5. **Project ↔ project.** Separate rows, worktrees, artifact references and handoff dirs. Agent invocations receive only the current project's worktree.
@@ -140,22 +147,22 @@ git:        { use_worktrees: true, create_pull_requests: true, auto_merge: false
 quality:    { require_tests: true, require_code_review: true, require_independent_qa: true,
               block_on_critical_findings: true, block_on_high_findings: true }
 capacity:   { on_quota_exhausted: pause, allow_agent_substitution: false,
-              allow_paid_api_fallback: false, allow_unsupported_integrations: false }
+              allow_paid_api_fallback: false, allow_unsupported_integrations: false }   # api_key billing is a per-agent choice, never a fallback (D15)
 safety:     { allow_direct_main_changes: false, allow_force_push: false, allow_secret_modification: false,
               allow_destructive_database_commands: false, allow_production_deployment: false }
-agents:     { architect: claude, challenger: codex, developer: codex, reviewer: claude, qa: antigravity_manual }
+agents:     { architect: claude, challenger: codex, developer: codex, reviewer: claude, qa: antigravity }  # registry ids from ~/.atlas/agents.yaml (ADR-007)
 ```
 
 `allow_paid_api_fallback` and `allow_unsupported_integrations` cannot be set to `true` in this release. The schema rejects it.
 
 ## 9. Agent role matrix and independence
 
-The default role assignment follows the brief. The policy engine enforces **ADR-005**:
+Roles point at agents in the user's registry (ADR-007 §2). The table below is the **recommended profile** for someone with Claude, Codex and Antigravity, not a built-in rule. Whatever profile is used, the policy engine enforces **ADR-005**:
 - The reviewer, challenger and QA agent for an artifact must differ from its author at both the *provider* level and the *model family* level.
 - Example: Antigravity running a Claude model may not review Claude-authored work. The declared model is recorded at import.
 - If independence cannot be satisfied with the available agents, the step goes to `AWAITING_MANUAL`. It is never silently fulfilled by the author.
 
-| Role | Default | Allowed fallback (only if `allow_agent_substitution: true`) |
+| Role | Recommended | Allowed fallback (only if `allow_agent_substitution: true`) |
 |---|---|---|
 | architect / planner | claude | codex |
 | plan challenger | codex | claude (only if plan author ≠ claude) |
@@ -165,6 +172,7 @@ The default role assignment follows the brief. The policy engine enforces **ADR-
 
 ## 10. Technology choices
 
+Platforms: macOS and Linux (D13). Platform-specific code sits behind `SecretStore`, `TestSandbox`, `AgentBoundary` and service-manager interfaces (ADR-007 §6).
 Backend: Python 3.12, FastAPI, Pydantic v2, **LangGraph + langgraph-checkpoint-sqlite** (workflow engine; no LangSmith/Platform/model integrations), SQLAlchemy 2.x + Alembic, SQLite WAL, asyncio subprocess, `structlog`.
 Frontend: React + TypeScript + Vite + Tailwind.
 Tests: pytest (+ pytest-asyncio, hypothesis for FSM properties), Vitest, Playwright.

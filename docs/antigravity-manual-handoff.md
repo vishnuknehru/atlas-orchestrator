@@ -17,7 +17,7 @@ The handoff happens for any step assigned to `antigravity`. By default that mean
 | **Implementation challenge** (optional) | If configured as a second reviewer | `review_result` |
 | **Plan challenge** (optional) | If configured as challenger | `review_result` |
 
-The dashboard shows the phase as **⏸ AWAITING_MANUAL — Antigravity**. If notifications are enabled, you'll also get a macOS notification (Phase 9).
+The dashboard shows the phase as **⏸ AWAITING_MANUAL — Antigravity**. If notifications are enabled, you'll also get a desktop notification (Phase 9).
 
 Nothing else in that project moves forward while you're away. Other projects keep running.
 

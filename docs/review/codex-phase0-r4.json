@@ -1,0 +1,16 @@
+{
+  "verdict": "changes_required",
+  "summary": "ATLAS-014, ATLAS-201 and ATLAS-202 are resolved at the documented architecture level. ATLAS-008 remains open because pending-merge cancellation is not integrated into restart and pause handling. No new CRITICAL or HIGH defects were identified in the round-3 fixes.",
+  "findings": [
+    {
+      "id": "ATLAS-008",
+      "severity": "HIGH",
+      "category": "github-merge-queues",
+      "file": "docs/recovery-strategy.md",
+      "location": "§1, lines 27–37; §3, lines 115–123; docs/workflow-state-machine.md §2, lines 109–118",
+      "description": "Authorization cancellation is defined for active MERGE_PENDING_REMOTE polling, but remains unspecified after restart or a phase pause. A queued or armed merge can remain active remotely after its authorization expires or is revoked.",
+      "evidence": "Recovery's merge_pr reconciliation returns queued requests to MERGE_PENDING_REMOTE without requiring an authorization check or cancellation. Startup then marks in-progress phases PAUSED, with auto_resume forced off until Phase 6. The documents do not require pending-merge authorization monitoring to continue during that pause. CANCELLING_REMOTE_MERGE is also absent from startup's enumerated remote reconciliation states, and cancel_remote_merge has no entry in the outbox recovery table. Consequently, the new cancellation path does not specify how an interrupted cancellation is completed before normal recovery pauses the phase.",
+      "recommendation": "Require startup reconciliation to evaluate authorization for every queued or armed request and resume outstanding cancellation operations before pausing or releasing locks. Define cancel_remote_merge recovery explicitly, include CANCELLING_REMOTE_MERGE in reconciliation, and require authorization monitoring to continue during pauses or cancel remote requests before pausing. Keep queue support unavailable until restart and pause scenarios pass fault-injection tests."
+    }
+  ]
+}

@@ -1,0 +1,86 @@
+{
+  "verdict": "changes_required",
+  "summary": "Reviewed all 18 round-1 findings against the revised documents. ATLAS-001, ATLAS-003, ATLAS-004 and ATLAS-014 remain incompletely resolved. The revisions also introduce four defects involving QA evidence, protected-path approvals, rebase recovery and rollback.",
+  "findings": [
+    {
+      "id": "ATLAS-001",
+      "severity": "CRITICAL",
+      "category": "evidence-integrity",
+      "file": "docs/security-model.md",
+      "location": "§5.1, lines 113–114; docs/workflow-state-machine.md §3.1, G-TEST and G-MERGE-PRE",
+      "description": "Candidate commits do not yet guarantee that tests execute the candidate content. Tests can modify tracked source in their writable worktree, and no required post-test integrity check invalidates evidence after those mutations.",
+      "evidence": "The sandbox explicitly permits writes to the worktree. G-TEST requires an executed test_run with exit 0 and the current candidate_id, without checking that the tested source remained identical to the candidate. The documented cleanliness checks concern agent executions and candidate creation. A test can modify source, pass against that modification, and leave passing evidence attached to the different commit that is pushed.",
+      "recommendation": "Execute tests against an enforced immutable source snapshot with separate writable output locations, or verify candidate identity and complete source integrity before and after every test execution and reject evidence on mutation."
+    },
+    {
+      "id": "ATLAS-003",
+      "severity": "CRITICAL",
+      "category": "recovery-data-loss",
+      "file": "docs/recovery-strategy.md",
+      "location": "§2.3, lines 63–74",
+      "description": "The snapshot preserves working-tree content but loses independently staged content before reset.",
+      "evidence": "The temporary index is populated using add -A from the working tree. If a file contains version A in the real index and version B in the working tree, only B enters the snapshot. Verification compares working-tree content, so it can pass, after which reset destroys the only indexed reference to A. No copy of the original index or its staged tree is retained.",
+      "recommendation": "Preserve the original index, staged blobs and conflict stages separately from the working-tree snapshot. Verify that both staged and working-tree states can be restored before allowing reset."
+    },
+    {
+      "id": "ATLAS-004",
+      "severity": "HIGH",
+      "category": "process-recovery",
+      "file": "docs/recovery-strategy.md",
+      "location": "§2.1, lines 46–51; §3, lines 86–90; §5 launch crash-point row",
+      "description": "The launch handshake still permits an undiscoverable child to start writing after recovery has completed process discovery.",
+      "evidence": "The parent spawns atlas-exec before the child publishes its run file. If the parent crashes and the child is delayed before publication, startup sees a launching row with no PID and no run file. Nothing requires that launcher to wait for acknowledgement from the current supervisor before exec. It can later publish its file and execute the target while recovery repairs the worktree. The crash matrix incorrectly asserts that no orphan is possible in this interval.",
+      "recommendation": "Require a supervisor acknowledgement before target exec, with a parent-liveness or generation check that prevents an unacknowledged launcher from proceeding after supervisor death. Recovery must settle every launching row before git repair."
+    },
+    {
+      "id": "ATLAS-014",
+      "severity": "HIGH",
+      "category": "database-integrity",
+      "file": "docs/database-design.md",
+      "location": "§3, test_runs lines 155–163, review_rounds lines 166–179, handoffs lines 212–218; §4",
+      "description": "Composite project foreign keys improve isolation but still do not enforce the subject relationships on which evidence gates depend, and several execution references remain unconstrained.",
+      "evidence": "A test_run can reference phase A, candidate B and execution C from different phases of the same project; all declared foreign keys pass. review_rounds.execution_id and handoffs.execution_id have no execution foreign key at all. Likewise, a phase's task and plan can belong to different tasks within one project. The application integrity rules do not define validation of these relationships.",
+      "recommendation": "Enforce candidate-to-phase, execution-to-candidate/phase and plan-to-task consistency through composite constraints or explicit transactional validators. Add missing execution foreign keys and negative tests for missing subjects and same-project mismatches."
+    },
+    {
+      "id": "ATLAS-101",
+      "severity": "HIGH",
+      "category": "qa-evidence-integrity",
+      "file": "docs/antigravity-manual-handoff.md",
+      "location": "§2, line 61; §4, lines 107–108",
+      "description": "The revised QA import policy explicitly accepts results obtained from modified source while assigning them to the unchanged candidate.",
+      "evidence": "Import checks that the phase's candidate still equals head_sha, but a modified QA worktree is expressly 'Not a rejection reason.' A QA session can change an implementation defect, observe passing behavior in that altered worktree, and import a pass for the original defective commit. A dedicated disposable worktree protects the implementation from deletion but does not establish evidence integrity.",
+      "recommendation": "Reject QA results when reviewed source differs from the packet candidate. Separate allowed generated outputs from source, verify source integrity, and require a fresh QA session after source mutation."
+    },
+    {
+      "id": "ATLAS-102",
+      "severity": "HIGH",
+      "category": "approval-model",
+      "file": "docs/workflow-state-machine.md",
+      "location": "§3.1, G-CAND; docs/database-design.md §3, approvals lines 201–209",
+      "description": "The protected-path approval required before candidate creation cannot be represented with the documented binding.",
+      "evidence": "G-CAND requires an approval bound to the prospective tree SHA when diff guards do not pass. The approvals table has candidate_id and plan_id but no tree_sha or equivalent proposed-tree subject. The candidate does not exist until that guard permits its creation. An implementation must either block all such changes or invent a weaker binding outside the documented schema.",
+      "recommendation": "Add an explicit immutable proposed-tree approval subject, including tree SHA and policy version, or create a non-deliverable candidate before approval and require approval of that exact candidate before testing or delivery."
+    },
+    {
+      "id": "ATLAS-103",
+      "severity": "HIGH",
+      "category": "rebase-recovery",
+      "file": "docs/recovery-strategy.md",
+      "location": "§1, push reconciliation row; docs/github-integration.md §2, step 8",
+      "description": "Push recovery contradicts the newly permitted rebase delivery path.",
+      "evidence": "GitHub integration allows a rebased candidate to replace the previous remote revision using force-with-lease. Recovery permits retry only when the previous remote revision is an ancestor and explicitly says 'never force.' After a crash before a rebased push takes effect, the normal previous remote SHA is not an ancestor of the rebased candidate, so reconciliation blocks a legitimate operation instead of safely resuming it.",
+      "recommendation": "Persist the push mode and expected remote SHA in the outbox intent. Reconcile rebased pushes separately and permit the exact recorded force-with-lease operation only while the remote still matches that expected SHA."
+    },
+    {
+      "id": "ATLAS-104",
+      "severity": "MEDIUM",
+      "category": "rollback-correctness",
+      "file": "docs/recovery-strategy.md",
+      "location": "§6, final paragraph; docs/github-integration.md §2, step 12",
+      "description": "The rollback command assumes a merge commit even though delivery always uses squash merge.",
+      "evidence": "Delivery invokes gh pr merge --squash, producing a single-parent commit. Recovery prescribes git revert -m1 <merge_sha>; the mainline option applies to merge commits and fails for a normal squash commit. The documented revert phase therefore cannot implement its default rollback command.",
+      "recommendation": "Use git revert <merge_sha> for squash commits, and select a mainline only after inspecting and validating a multi-parent commit."
+    }
+  ]
+}

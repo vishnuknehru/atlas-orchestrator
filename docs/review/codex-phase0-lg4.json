@@ -1,0 +1,5 @@
+{
+  "verdict": "approved",
+  "summary": "Both findings are fully resolved at the specification level. ATLAS-L03: recovery-strategy.md §3 lines 126–138 now orders step resolution before PAUSED and classification; ADR-006 §3 line 51 explicitly completes underlying transitions while preserving existing overlays, with crash scenarios required in §5 lines 145–146. ATLAS-L21: ADR-006 §3 lines 40–45 prohibits effects and completion for abandoned steps and routes permitted retries through X_begin with fresh identities, retry limits, and writer preservation/reset; recovery-strategy.md §3 lines 126–128 records the retry disposition. ADR-006 §5 line 147 requires interrupted read-only and writer replay tests. No new CRITICAL or HIGH defect introduced by these fixes was identified. Verification covered repository specifications, not implementation or test execution.",
+  "findings": []
+}

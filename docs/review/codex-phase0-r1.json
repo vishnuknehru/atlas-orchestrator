@@ -1,0 +1,186 @@
+{
+  "verdict": "changes_required",
+  "summary": "The architecture has blocking gaps in evidence binding, recovery, credential isolation and GitHub delivery. The documented pipeline cannot consistently review and merge the same content, and several recovery paths can lose work or accept insufficient merge evidence.",
+  "findings": [
+    {
+      "id": "ATLAS-001",
+      "severity": "CRITICAL",
+      "category": "evidence-integrity",
+      "file": "docs/github-integration.md",
+      "location": "§2, lines 19–22; docs/workflow-state-machine.md:113–118",
+      "description": "Tests and reviews are bound to HEAD before ATLAS commits the implementation. Uncommitted changes do not change HEAD, and the specified review diff excludes them. Consequently, evidence can describe the base commit while ATLAS later commits different, unreviewed content.",
+      "evidence": "Implementation and testing precede review on `git diff <base_sha>...HEAD`; commit happens afterward and explicitly permits uncommitted agent changes. G-TEST, G-REV and G-QA identify content only by the current head SHA. With uncommitted implementation, that SHA still identifies the base.",
+      "recommendation": "Create an immutable candidate commit before testing and review, or bind every gate to a complete tree snapshot including staged, unstaged and untracked files. Verify the final commit has exactly that tree and invalidate evidence after any mutation."
+    },
+    {
+      "id": "ATLAS-002",
+      "severity": "HIGH",
+      "category": "workflow-correctness",
+      "file": "docs/antigravity-manual-handoff.md",
+      "location": "§2 line 61; §4 lines 107–108",
+      "description": "The default manual QA path rejects a normal implementation that remains uncommitted until QA passes.",
+      "evidence": "Import requires unchanged HEAD and an empty `git status --porcelain`. However, architecture.md:91–93 places QA before commit, and github-integration.md:22 explicitly allows agents to leave changes uncommitted. The troubleshooting instruction at line 254 recommends discarding changes, which could discard the implementation being reviewed.",
+      "recommendation": "Generate QA packets from an immutable candidate commit or isolated snapshot. Check against that snapshot rather than requiring the pre-commit implementation worktree to be clean, and remove destructive troubleshooting advice."
+    },
+    {
+      "id": "ATLAS-003",
+      "severity": "CRITICAL",
+      "category": "recovery-data-loss",
+      "file": "docs/recovery-strategy.md",
+      "location": "§2, lines 42–45",
+      "description": "Recovery deletes untracked implementation files without first preserving their contents.",
+      "evidence": "Recovery captures `git status --porcelain` and `git diff`, then executes `git reset --hard` and `git clean -fd`. Ordinary git diff does not include untracked file contents; status records their names only. A newly created source file can therefore disappear despite the claim that partial changes are retained.",
+      "recommendation": "Durably archive tracked, staged, untracked and binary changes before any reset or clean. Verify archive completeness and restoration, and refuse destructive recovery if preservation fails."
+    },
+    {
+      "id": "ATLAS-004",
+      "severity": "HIGH",
+      "category": "process-recovery",
+      "file": "docs/recovery-strategy.md",
+      "location": "§2, lines 38–45; §3, lines 55–58",
+      "description": "Recovery lacks a safe protocol for subprocess creation and termination, allowing a surviving writer to race worktree reset or git recovery.",
+      "evidence": "Recovery discovers executions only through recorded running rows and PID/start-time metadata, without addressing a crash after process spawn but before PID persistence. For known orphans it waits after SIGINT and sends SIGTERM, then proceeds without a documented wait-for-exit or SIGKILL. Startup also aborts git operations before reconciling live executions.",
+      "recommendation": "Specify a durable launch handshake and discoverable execution ownership. Quiesce all execution process groups, confirm termination with bounded escalation, and only then repair git state or reset worktrees."
+    },
+    {
+      "id": "ATLAS-005",
+      "severity": "CRITICAL",
+      "category": "credential-isolation",
+      "file": "docs/security-model.md",
+      "location": "§3.3, lines 51–55; §5, lines 108–111",
+      "description": "Environment scrubbing and cwd isolation do not enforce the stated credential and project boundaries. Repository code executed by tests can read provider credentials, the dashboard token and the ATLAS database.",
+      "evidence": "Tests explicitly run as the user's macOS account without a sandbox. The document acknowledges they can read anything that user can read. Credentials reside in that user's home/keychain, and session_token and atlas.db are protected only by user file permissions. Independently reviewed changes can also introduce malicious test code.",
+      "recommendation": "Require an enforced execution boundary before running repository code: a separate identity or sandbox with explicit filesystem and network access. Keep ATLAS state, other projects and credentials inaccessible. Treat trusted-repository acknowledgement as a limitation, not as credential isolation."
+    },
+    {
+      "id": "ATLAS-006",
+      "severity": "HIGH",
+      "category": "cli-configuration",
+      "file": "docs/agent-compatibility.md",
+      "location": "§3.2, lines 103–127",
+      "description": "The Codex template inherits user configuration while claiming subscription-only execution and controlled integrations. Removing API-key environment variables and omitting dangerous flags does not neutralize configured providers, MCP integrations or other inherited execution settings.",
+      "evidence": "docs/evidence/codex-exec-help.txt:19–25 states configuration is loaded from the user config. Lines 93–97 distinguish `--ignore-user-config`, which preserves authentication, from `--ignore-rules`, which skips only execpolicy rules. The template passes only the latter.",
+      "recommendation": "Use an isolated, explicitly vetted configuration while retaining CLI-managed subscription authentication. Pin the provider and relevant execution/integration settings, and verify effective configuration in the Phase 2 hostile-configuration tests."
+    },
+    {
+      "id": "ATLAS-007",
+      "severity": "HIGH",
+      "category": "merge-authorization",
+      "file": "docs/workflow-state-machine.md",
+      "location": "§2 line 64; §3.1 lines 119–120",
+      "description": "The transition from human approval to MERGING has no explicit guard that revalidates merge eligibility or binds the approval to the current candidate. The listed CI guard applies only when entering AWAITING_APPROVAL.",
+      "evidence": "G-CI governs `CI_VALIDATION→MERGING/AWAITING_APPROVAL`, while `AWAITING_APPROVAL→MERGING` is described only as 'user approves merge'. Tests, required checks, reviews, policy and the PR head may change during that wait. `--match-head-commit` verifies the head, not current approvals or all local gates.",
+      "recommendation": "Define a guard on every entry to MERGING and immediately before executing its outbox operation. Require an unexpired approval for the exact candidate and policy version, and revalidate current GitHub and local gate evidence."
+    },
+    {
+      "id": "ATLAS-008",
+      "severity": "HIGH",
+      "category": "github-merge-queues",
+      "file": "docs/recovery-strategy.md",
+      "location": "§1, lines 29–33; docs/github-integration.md:27",
+      "description": "Merge reconciliation treats an open PR as an uncompleted merge request, but the captured gh help documents successful queueing and implicit auto-merge while the PR remains open.",
+      "evidence": "docs/evidence/gh-pr-merge-help.txt:6–9 says required-queue branches enqueue a passing PR and enable auto-merge when required checks have not passed. The architecture says `--auto` is never used, but omitting it does not prevent this behavior. No queued or auto-merge-requested outcome, cancellation policy, or reconciliation rule is defined.",
+      "recommendation": "Either reject merge-queue repositories explicitly or model queued and auto-merge-requested outcomes, reconcile them without resubmission, and handle cancellation, head changes and merge-group CI before confirming delivery."
+    },
+    {
+      "id": "ATLAS-009",
+      "severity": "HIGH",
+      "category": "merge-evidence",
+      "file": "docs/workflow-state-machine.md",
+      "location": "§3.1, line 120; docs/recovery-strategy.md:29,59",
+      "description": "A remotely merged PR can be recorded as MERGED without proving that its merged head is the candidate that passed ATLAS gates.",
+      "evidence": "G-MERGE requires only `state=MERGED` and a merge commit OID. Merge reconciliation likewise says 'MERGED → confirm with mergeCommit', without checking the expected head. Startup expressly handles PRs merged by a human, who could first push a different head.",
+      "recommendation": "Verify PR identity, repository, base and merged head against the approved candidate and evidence. Record externally merged mismatches as an exception requiring review rather than treating them as successful gated delivery."
+    },
+    {
+      "id": "ATLAS-010",
+      "severity": "HIGH",
+      "category": "github-protection",
+      "file": "docs/github-integration.md",
+      "location": "§1 line 9; §3 lines 40–41",
+      "description": "Unknown branch protection falls back to observed checks, which cannot establish that all required checks or reviews exist.",
+      "evidence": "When protection cannot be read, ATLAS treats every reported check as required. A missing required job is absent from that set; one unrelated successful check satisfies the fallback. Required review policy is also unknown, yet eligibility allows null reviewDecision when reviews are not required.",
+      "recommendation": "Represent protection discovery as known or unknown and fail closed for automated merging when unknown. Alternatively require explicit trusted policy defining required check identities and reviews; do not infer completeness from reported checks."
+    },
+    {
+      "id": "ATLAS-011",
+      "severity": "HIGH",
+      "category": "workflow-correctness",
+      "file": "docs/workflow-state-machine.md",
+      "location": "§2, lines 57–64; docs/recovery-strategy.md:26–29",
+      "description": "The CI repair loop does not define how a second reviewed commit updates the existing delivery records and PR.",
+      "evidence": "CI_VALIDATION returns to FIXING, then the ordinary path traverses COMMITTED, PUSHED and PR_OPEN again. PR creation has the fixed key `<phase>:pr:v1`, while G-PR requires the remote head to equal the local commit. No explicit reuse/update transition explains how an already confirmed create_pr operation is handled for a new head or how stale approvals and merge intents are invalidated.",
+      "recommendation": "Define candidate revisions within a phase and an explicit existing-PR update path. Keep PR identity stable, key commit/push/merge operations by revision, and invalidate evidence and approvals whenever the candidate changes."
+    },
+    {
+      "id": "ATLAS-012",
+      "severity": "HIGH",
+      "category": "database-project-isolation",
+      "file": "docs/database-design.md",
+      "location": "§3, lines 48–54, 102–105",
+      "description": "The repository lock is keyed by project rather than repository, and registration permits the same GitHub repository in multiple projects.",
+      "evidence": "`projects.github_repo` is not unique; only project name is unique. `repo_locks` has project_id as its primary key. Two registrations of the same owner/name can therefore each acquire a lock and run code-changing phases or merges concurrently, despite the one-phase-per-repository invariant.",
+      "recommendation": "Use a canonical repository identity shared by registrations and key scheduling/merge locks by it, or prohibit duplicate repository registrations with an appropriate uniqueness constraint."
+    },
+    {
+      "id": "ATLAS-013",
+      "severity": "MEDIUM",
+      "category": "database-artifacts",
+      "file": "docs/database-design.md",
+      "location": "§3, lines 136–143",
+      "description": "Content deduplication conflicts with project ownership: identical content can belong to only one project.",
+      "evidence": "`artifacts.sha256` is the global primary key, but each row has exactly one project_id. Two projects producing an identical empty log, schema or prompt collide. Reusing the existing row violates the ownership check described in security-model.md:81; inserting a second row fails.",
+      "recommendation": "Separate globally deduplicated blobs from project-scoped artifact references, or use project_id plus hash as the artifact identity and reference that composite key."
+    },
+    {
+      "id": "ATLAS-014",
+      "severity": "HIGH",
+      "category": "database-integrity",
+      "file": "docs/database-design.md",
+      "location": "§3, lines 81–100, 121–160, 179–200; §4 lines 227–231",
+      "description": "The schema does not enforce ownership consistency between evidence, phases, tasks and projects, allowing cross-project or orphaned records that policy evaluation depends on.",
+      "evidence": "A phase can reference a task and plan from different projects because their project_id values are unconstrained. test_runs has no foreign keys for phase_id or execution_id. executions likewise lacks task/phase foreign keys. The enumerated application integrity rules do not supply these ownership validations.",
+      "recommendation": "Add foreign keys and composite ownership constraints for project/task/phase relationships and evidence references. For polymorphic references, define explicit transactional validation and negative tests covering mismatched ownership and missing subjects."
+    },
+    {
+      "id": "ATLAS-015",
+      "severity": "HIGH",
+      "category": "qa-gates",
+      "file": "docs/workflow-state-machine.md",
+      "location": "§3.1, lines 114–116; docs/antigravity-manual-handoff.md:121–135",
+      "description": "The QA gate accepts a pass verdict without requiring complete acceptance-criterion coverage or consistency with blocking findings.",
+      "evidence": "G-QA checks only a pass verdict for the current SHA or a waiver. The handoff schema allows an empty acceptance_criteria array and allows verdict=pass alongside not_met criteria or CRITICAL findings. G-REV checks findings before QA, so findings introduced by QA need an explicit subsequent gate.",
+      "recommendation": "Validate exact criterion IDs and completeness, require every mandatory criterion to be met, and reject contradictory verdicts. Re-evaluate all blocking findings across review and QA at commit and merge gates."
+    },
+    {
+      "id": "ATLAS-016",
+      "severity": "MEDIUM",
+      "category": "cli-arguments",
+      "file": "docs/agent-compatibility.md",
+      "location": "§2.3, lines 73–75",
+      "description": "Claude command templates pass a schema filename to a flag documented as accepting the schema itself.",
+      "evidence": "Templates use `--json-schema <plan.schema.json>` and `<review.schema.json>`. docs/evidence/claude-help.txt describes `--json-schema <schema>` and demonstrates an inline JSON object. In contrast, that help explicitly identifies file-or-JSON support for --settings and files-or-strings support for --mcp-config.",
+      "recommendation": "Read and validate the schema file in ATLAS and pass its serialized JSON as one argv argument. Capture a successful structured-output fixture using the exact production template."
+    },
+    {
+      "id": "ATLAS-017",
+      "severity": "HIGH",
+      "category": "roadmap-dependencies",
+      "file": "docs/implementation-roadmap.md",
+      "location": "§Phase 4 lines 58–61; §Phase 5 lines 63–66; §Phase 7 lines 73–76; §Phase 8 lines 78–81",
+      "description": "The roadmap enables delivery before mandatory QA workflow and repository locking are delivered, so its intermediate releases cannot meet their own safety invariants with default configuration.",
+      "evidence": "Phase 4 promises READY_FOR_COMMIT, which requires G-QA. QA workflow arrives in Phase 7, after Phase 5 merge delivery. Repo locks and per-provider concurrency are assigned to Phase 8, although merge eligibility already requires the repo lock and multiple projects are supported in Phase 1.",
+      "recommendation": "Move minimum QA gating, repository locking and safe restart behavior ahead of live delivery. Give incomplete stages explicit disabled capabilities and fail-closed acceptance criteria so each release works without bypassing mandatory gates."
+    },
+    {
+      "id": "ATLAS-018",
+      "severity": "MEDIUM",
+      "category": "workflow-liveness",
+      "file": "docs/workflow-state-machine.md",
+      "location": "§2, lines 67–74",
+      "description": "A failed post-merge verification leaves the original phase without a defined completion path after its revert is delivered.",
+      "evidence": "The original phase moves POST_MERGE_VERIFICATION → ROLLBACK_PROPOSED → REVERT_PR_OPEN. The revert is a separate phase, but REVERT_PR_OPEN has no outgoing transition. Task completion requires all phases COMPLETED, and dependencies also require COMPLETED.",
+      "recommendation": "Define the original phase's terminal rolled-back or failed outcome, connect it to the revert phase result, and specify dependency cancellation/replanning and task completion semantics."
+    }
+  ]
+}

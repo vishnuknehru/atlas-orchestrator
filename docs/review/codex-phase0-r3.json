@@ -1,0 +1,46 @@
+{
+  "verdict": "changes_required",
+  "summary": "Checked all 18 round-1 findings and the four additional round-2 findings against the revised documents. ATLAS-008 and ATLAS-014 remain incompletely resolved. Two new defects affect held-candidate approvals and sandbox filesystem access. The remaining earlier findings are resolved at the documented architecture level.",
+  "findings": [
+    {
+      "id": "ATLAS-008",
+      "severity": "HIGH",
+      "category": "github-merge-queues",
+      "file": "docs/github-integration.md",
+      "location": "§3, lines 53–59; docs/workflow-state-machine.md:158–159; docs/recovery-strategy.md:34",
+      "description": "Queued and armed merges now have a state, but still lack a cancellation policy when ATLAS authorization expires or is revoked. Once GitHub holds the merge request, it can merge without another G-MERGE-PRE evaluation.",
+      "evidence": "MERGE_PENDING_REMOTE polls and reacts to remote cancellation, dequeueing or head changes. Neither its transitions nor reconciliation cancel the remote request after approval expiry, a policy-version change, or disabling auto_merge. G-MERGED checks identity and reachability, not authorization. Disabling queue support by default limits exposure but does not make the documented enabled path safe.",
+      "recommendation": "Define authorization semantics for pending remote merges and an outbox operation to cancel queued/armed requests when authorization becomes invalid. Reconcile cancellation before allowing repairs or replacement delivery intents. Keep support unavailable until these paths are implemented and tested."
+    },
+    {
+      "id": "ATLAS-014",
+      "severity": "HIGH",
+      "category": "database-integrity",
+      "file": "docs/database-design.md",
+      "location": "§3, lines 170–184 and 217–223; §4, lines 261–268",
+      "description": "Review and handoff execution references still enforce only project ownership, allowing evidence to be associated with an execution for a different candidate within the same project.",
+      "evidence": "review_rounds independently references candidate_id and execution_id through project-scoped foreign keys. A review of candidate A can therefore reference an execution of candidate B. handoffs constrains candidate-to-phase but likewise references its execution only by project. The enumerated relationship validators cover test executions and handoff candidate-to-phase consistency; the additional transactional validation addresses NULL components, so it does not close these fully populated mismatches.",
+      "recommendation": "Enforce review/handoff execution-to-subject consistency through composite foreign keys or explicit transactional validators, including plan-review executions. Add negative tests with fully populated references to different candidates and phases in the same project."
+    },
+    {
+      "id": "ATLAS-201",
+      "severity": "HIGH",
+      "category": "approval-model",
+      "file": "docs/workflow-state-machine.md",
+      "location": "§0, line 24; §3.1, G-DIFF line 150; docs/database-design.md:103–104",
+      "description": "A held candidate can pass all diff guards using an approval for only one category of violation.",
+      "evidence": "guard_status records only clear or held. G-DIFF accepts an approved protected_path/destructive_migration/secret_change approval for the candidate and policy version, without requiring its kind to match every failed guard. A candidate containing both a protected workflow edit and a destructive migration therefore passes with only a protected_path approval.",
+      "recommendation": "Persist the complete set of failed guards and require a current, matching approval for every violation before TESTING and delivery. Apply the same check to the AWAITING_APPROVAL exit."
+    },
+    {
+      "id": "ATLAS-202",
+      "severity": "HIGH",
+      "category": "sandbox-configuration",
+      "file": "docs/security-model.md",
+      "location": "§5.1, lines 113–115; docs/architecture.md §4, directory layout",
+      "description": "The sandbox filesystem requirements simultaneously allow verification worktrees and explicitly deny their enclosing ATLAS directory, leaving the default test execution boundary contradictory.",
+      "evidence": "The profile permits reads and writes to the verification worktree but explicitly denies ~/.atlas with an exception only for the execution's own sandbox directory. The documented worktrees and project clones live beneath ~/.atlas/worktrees and ~/.atlas/projects. Verification worktrees are not specified to live inside the exempt sandbox directory. A profile enforcing the blanket denial cannot execute tests against those worktrees; weakening that denial broadly exposes ATLAS state.",
+      "recommendation": "Specify verification worktrees under the per-execution sandbox directory, or define narrow worktree exceptions with explicit rule precedence while keeping the database, artifacts, credentials and other worktrees inaccessible. Extend the self-test to prove both candidate access and state isolation."
+    }
+  ]
+}

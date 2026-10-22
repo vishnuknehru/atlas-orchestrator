@@ -1,0 +1,27 @@
+# Captured 2026-10-22T14:53Z on macOS 26.6.2 arm64
+$ claude --version
+2.1.308 (Claude Code)
+$ codex --version
+codex-cli 0.163.0
+$ agy --version
+1.4.5
+$ git --version
+git version 2.50.1 (Apple Git-155)
+$ gh --version
+gh version 2.97.0 (2026-07-31)
+https://github.com/cli/cli/releases/tag/v2.97.0
+$ python3.12 --version
+Python 3.12.13
+$ uv --version
+uv 0.11.19 (Homebrew 2026-06-03 aarch64-apple-darwin)
+$ node --version
+v24.14.0
+$ codex login status
+Logged in using ChatGPT
+$ gh auth status (token redacted)
+github.com
+  ✓ Logged in to github.com account vishnuknehru (keyring)
+  - Active account: true
+  - Git operations protocol: https
+  - Token: gho_<redacted>
+  - Token scopes: 'gist', 'read:org', 'repo', 'workflow'

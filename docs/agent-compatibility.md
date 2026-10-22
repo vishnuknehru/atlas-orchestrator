@@ -23,7 +23,7 @@ ATLAS re-probes versions and flags at startup (§5), because these CLIs update t
 | `capacity_signal` | ✅ `system/api_retry` events with `error` ∈ {`rate_limit`, `authentication_failed`, `billing_error`, `overloaded`, …} in stream-json [H] | ⚠️ undocumented for exec; classify from exit code + stderr (to verify) | n/a |
 | `supported_subscription_auth` | ✅ for the user's own use of the unmodified binary [L] | ✅ "advanced" path for trusted runners; not for public/OSS repos [N] | ✅ for the user's own interactive use |
 | `supported_third_party_orchestration` | ⚠️ Personal-use only. Not offered to others; no credential handling [L] | ⚠️ Trusted local runner, private repos [N] | ❌ **Treated as not permitted.** Terms §6 [T] |
-| **ATLAS integration mode** | `headless` | `headless` (private repos) / `blocked` (public repos unless the user overrides) | `manual_handoff` |
+| **ATLAS integration mode** | `headless` | `headless` (private repos) / `blocked` (public repos; no override in this release, D5) | `manual_handoff` |
 
 Sources:
 - [L] https://code.claude.com/docs/en/legal-and-compliance
@@ -97,7 +97,7 @@ To verify: the exact final-result shape when a Pro usage window is exhausted, ca
 - "Treat `~/.codex/auth.json` like a password: it contains access tokens."
 - "By default, `codex exec` runs in a read-only sandbox." "`--full-auto` is no longer supported."
 
-**Assessment:** ATLAS on the user's own Mac is a trusted runner, which makes this path supported for **private** repositories. For a **public** repository, ATLAS marks the Codex adapter `blocked: public_repository` and requires an explicit, logged per-project override. ATLAS never reads `~/.codex/auth.json`.
+**Assessment:** ATLAS on the user's own Mac is a trusted runner, which makes this path supported for **private** repositories. For a **public** repository, ATLAS marks the Codex adapter `blocked: public_repository`. **No override exists in this release** (D5: the user works only on private repos; reconsider if a public repo is ever registered). ATLAS never reads `~/.codex/auth.json`.
 
 ### 3.2 Command templates (flags present in `evidence/codex-exec-help.txt`)
 

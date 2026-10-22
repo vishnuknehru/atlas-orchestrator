@@ -16,11 +16,11 @@ All evidence is bound to an **immutable candidate commit**, never to uncommitted
 - Tests, code review, QA, CI, approvals and merge **all reference `candidate_id`**. A gate passes only if every piece of evidence it needs refers to the **current** candidate.
 - Any further change creates a new candidate (`revision n+1`). Changes include a fix, a rebase onto a new base, or a conflict resolution. **All evidence and approvals for older revisions become stale and must be re-obtained.** Unresolved findings carry forward by fingerprint.
 - After an agent run, ATLAS checks that the worktree at the candidate is clean (`git status --porcelain --untracked-files=all` empty). Any change outside a recorded candidate blocks progress.
-- **Evidence-producing runs never execute in the developer worktree.** Each test run, and each QA handoff, gets a fresh **detached verification worktree** at the candidate commit (`git worktree add --detach`). ATLAS checks **source integrity** before and after the run (ATLAS-001 r2, ATLAS-101):
+- **Evidence-producing runs never execute in the developer worktree.** Each **test run** gets the candidate tree, built directly from git objects (not `git archive`), in a fresh hardened Docker container (security-model.md §5.1). Each **QA handoff** gets a fresh **detached verification worktree** at the candidate commit (`git worktree add --detach`). ATLAS checks **source integrity** before and after the run (ATLAS-001 r2, ATLAS-101). For test containers, the source is mounted **read-only**, so it can't change. The helper container's in-VM manifest attestation (path, type, mode, blob id, using lstat semantics) before and after the run must equal the candidate's manifest exactly (security-model.md §5.1.3). For QA worktrees the check is:
   - before: `HEAD == candidate.commit_sha` and status clean;
   - after: `HEAD` unchanged, `git diff --quiet <candidate>` passes, and no untracked non-ignored files exist.
 
-  Ignored paths (build output, caches, reports written to the sandbox output dir) are allowed to change. If the run mutated source, its evidence is recorded as `invalid_source_mutated` and **never** satisfies a gate. The verification worktree is then discarded.
+  Ignored paths (build output, caches, reports written to the sandbox output dir) are allowed to change. If the run mutated source, its evidence is recorded as `invalid_source_mutated` and **never** satisfies a gate. The container (or QA worktree) is then discarded.
 - **Protected-path changes (ATLAS-102, ATLAS-201):** the candidate is created *before* any approval exists. Diff guards record the **complete set of violations** in `candidate_guard_violations`, one row per violation: kind ∈ {`protected_path`, `secret_change`, `destructive_migration`}, plus path and detail. A candidate with any violation is `held`. It cannot enter TESTING or delivery until **every violation kind present** has its own approved approval bound to **that candidate_id** and the current policy_version. One approval kind never covers another. The same check runs again at G-MERGE-PRE.
 - The commit pushed to GitHub is the candidate commit itself, not a re-commit. Its SHA can be compared directly with the PR head and the merged head.
 
@@ -51,7 +51,7 @@ Overlay states, reachable from any non-terminal state:
 - `CANCELLED`: terminal.
 - `FAILED`: terminal; requires user confirmation or an unrecoverable error.
 
-**Plan approval:** by default, a human approves the plan before implementation (`execution.mode: supervised`). In `autonomous` mode, a challenger "approved" verdict with no open critical or high findings auto-advances. An unresolved critical or high finding always goes to a human. A re-plan creates a new plan revision. Phases already COMPLETED are kept, and phases not yet started are superseded.
+**Plan approval (D7):** a human **always** approves the plan before implementation. `execution.mode` accepts only `supervised` in this release; the config schema rejects `autonomous` (ATLAS-D11). An unresolved critical or high finding is always shown to the user for that approval. A re-plan creates a new plan revision. Phases already COMPLETED are kept, and phases not yet started are superseded.
 
 **Task completion with rollback (ATLAS-018):** a ROLLED_BACK phase lets the task complete only if the user acknowledges it. The final report states which phases were rolled back. Phases depending on a ROLLED_BACK phase go to `BLOCKED(reason=dependency_rolled_back)` and need re-planning or cancellation.
 
@@ -82,13 +82,12 @@ stateDiagram-v2
   CI_VALIDATION --> FIXING: checks failed (phase-caused)
   CI_VALIDATION --> CANDIDATE_CREATED: BEHIND/conflict → rebase creates new revision
   CI_VALIDATION --> AWAITING_APPROVAL: G-CI and merge needs human approval
-  CI_VALIDATION --> MERGING: G-CI + G-MERGE-PRE and auto_merge on
   AWAITING_APPROVAL --> MERGING: approval for this candidate + G-MERGE-PRE
   AWAITING_APPROVAL --> CI_VALIDATION: approval stale (candidate/policy changed or expired)
   MERGING --> MERGE_PENDING_REMOTE: GitHub queued / auto-merge armed
   MERGE_PENDING_REMOTE --> MERGED: G-MERGED
   MERGE_PENDING_REMOTE --> CI_VALIDATION: dequeued / auto-merge cancelled / head changed
-  MERGE_PENDING_REMOTE --> CANCELLING_REMOTE_MERGE: authorisation no longer valid (approval expired/revoked, policy changed, auto_merge disabled, gate fails)
+  MERGE_PENDING_REMOTE --> CANCELLING_REMOTE_MERGE: authorisation no longer valid (approval expired/revoked, policy changed, gate fails)
   CANCELLING_REMOTE_MERGE --> CI_VALIDATION: cancellation confirmed (remote no longer queued/armed)
   CANCELLING_REMOTE_MERGE --> MERGED: GitHub merged before cancellation took effect → G-MERGED + BLOCKED(merged_after_authorisation_lapsed) for user review
   MERGING --> MERGED: G-MERGED
@@ -158,7 +157,7 @@ An invalid `(from, to)` pair raises `InvalidTransition`, which is logged and not
 | G-PUSH | READY_FOR_DELIVERY→PUSHED | Outbox push confirmed: `ls-remote` branch == candidate commit SHA |
 | G-PR | PUSHED→PR_OPEN | The phase's single PR exists (created once, found by marker), and PR `headRefOid` == candidate commit SHA |
 | G-CI | CI_VALIDATION→AWAITING_APPROVAL/MERGING | Branch protection is **known** (or the project config gives an explicit trusted required-check list). Every required check is present and `SUCCESS` on the candidate SHA. `reviewDecision` satisfies the known review requirement. `mergeable=MERGEABLE`. Blocking findings are clear (re-evaluated, ATLAS-015). If protection is unknown and no explicit list exists, automated merge is impossible and the phase waits for the user, who may merge in GitHub themselves (ATLAS-010) |
-| G-MERGE-PRE | every entry to MERGING, **again immediately before the merge op executes**, and **on every poll while MERGE_PENDING_REMOTE** | All of G-CI and G-DIFF re-evaluated **now** against fresh `gh` data. The repo lock is held. A merge authorisation exists: either `auto_merge: true` in the current policy version, or an `approvals` row with kind=merge, status=approved, the same `candidate_id`, the same `policy_version` and an unexpired `expires_at` (ATLAS-007) |
+| G-MERGE-PRE | every entry to MERGING, **again immediately before the merge op executes**, and **on every poll while MERGE_PENDING_REMOTE** | All of G-CI and G-DIFF re-evaluated **now** against fresh `gh` data. The repo lock is held. A merge authorisation exists: an `approvals` row with kind=merge, status=approved, the same `candidate_id`, the same `policy_version` and an unexpired `expires_at` (ATLAS-007). **There is no `auto_merge` alternative in this release (D6, ATLAS-D11)** |
 | G-MERGED | →MERGED | `gh pr view` shows `state=MERGED`. `headRefOid` at merge == candidate commit SHA, the base matches, and the repo matches. `mergeCommit.oid` is recorded and reachable from `origin/<base>`. A mismatch goes to `BLOCKED(external_merge_mismatch)` and is never treated as gated delivery (ATLAS-009) |
 | G-RETRY | any retry | `retry_count < limit`, the operation is idempotent or reconciled, and capacity allows it |
 

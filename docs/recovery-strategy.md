@@ -65,6 +65,8 @@ For each live execution process group:
 3. Send SIGKILL to the group.
 4. Confirm that no process with that pgid remains (`os.killpg(pgid, 0)` raises `ProcessLookupError`).
 
+**Docker test executions** are also quiesced on the daemon side. ATLAS lists the containers labelled `atlas.execution_id`, runs `docker kill`, then `docker wait`/`inspect` until none is running. CLI process exit is **not** quiescence. If the daemon is unreachable, the run goes to `BLOCKED(sandbox_state_unknown)` (security-model.md §5.1.7).
+
 If a group still cannot be confirmed gone, the phase goes to `BLOCKED(process_not_terminated)` and **no** repair runs on its worktree. Orphans are never adopted, because their output pipes are lost. The execution is recorded as `interrupted`.
 
 ### 2.3 Preserving work before reset (ATLAS-003, revised in round 2)
@@ -107,7 +109,8 @@ Ignored files are not preserved, since they are build output by definition. The 
 ```
 1.  Open DB, PRAGMA quick_check → on failure: no scheduler; offer restore from latest backup
 2.  Acquire instance lock (flock on ~/.atlas/atlas.lock) → prevents two ATLAS processes
-3.  Discover executions (DB launching/running + ~/.atlas/run/*.json); QUIESCE all live groups (§2.2)
+3.  Discover executions (DB launching/running + ~/.atlas/run/*.json + atlas.*-labelled containers/volumes on the Colima
+       `atlas` daemon); QUIESCE all live groups and containers (§2.2); remove orphaned containers/volumes after collection
 4.  Probe agents (version/help hash/auth) → update agents table; nothing scheduled
 5.  For each project: git fetch (if network); `git worktree prune`; list worktrees vs phases
 6.  Repair interrupted git state in worktrees (only now that no writer is alive):

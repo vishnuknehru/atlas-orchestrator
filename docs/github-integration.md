@@ -23,14 +23,14 @@ All commands are argv lists, never shell strings.
 | 2 | Worktree + branch | `git -C repo worktree add -b atlas/<slug> <wt> <base_sha>` | Branch name generated and regex-validated by ATLAS |
 | 3 | Implement | developer agent, cwd=`<wt>` | The agent must not commit. Any agent-created commit is detected (HEAD moved) and folded into the candidate via `reset --soft`, after snapshotting |
 | 4 | **Candidate commit** | diff guards on `git add -A` index, then `git -C wt -c core.hooksPath=/dev/null -c user.name=… -c user.email=… commit -m "<phase title> (r<n>)" --trailer "Atlas-Phase: <id>" --trailer "Atlas-Candidate: r<n>"` | Local only. Creates `candidate(r<n>, commit_sha, tree_sha)`. ATLAS then verifies that `git status --porcelain` is empty |
-| 5 | Test | project test commands in a fresh **detached verification worktree** at the candidate, inside the test sandbox (security-model.md §5) | `executed` evidence bound to the candidate, valid only with a source-integrity check before and after (workflow-state-machine.md §0) |
+| 5 | Test | project test commands in hardened Docker containers on the Colima `atlas` VM, with the candidate tree (built from git objects) mounted **read-only** (security-model.md §5.1) | `executed` evidence bound to the candidate, valid only if the pre/post in-VM manifest attestation equals the candidate manifest (workflow-state-machine.md §0) |
 | 6 | Review / QA | agents on `git diff <base_sha>..<candidate_sha>` | Evidence bound to the candidate |
 | 7 | Fix loop | developer edits → new candidate commit `r<n+1>` on top | Older evidence goes stale. The branch accumulates revision commits; squash merge collapses them |
 | 8 | Push (outbox) | `git -C wt push origin <candidate_sha>:refs/heads/atlas/<slug>` | Normally fast-forward. A rebase (conflict repair) produces a new candidate whose outbox intent records `mode=force_with_lease` and `expected_remote_sha`, and is pushed with `--force-with-lease=refs/heads/atlas/<slug>:<expected_remote_sha>`. Only on ATLAS's own branch, and logged. Recovery replays exactly the recorded mode (recovery-strategy.md §1) |
 | 9 | PR (outbox, once per phase) | `gh pr create --repo o/r --base <base> --head atlas/<slug> --title <generated> --body-file <file>` | The body has a hidden `<!-- atlas:idempotency=<phase>:pr -->` marker and `atlas:revision=r<n>`. Later revisions update the same PR (`gh pr edit --body-file`) |
 | 10 | CI | poll `gh pr checks <n> --json …` + `gh pr view <n> --json headRefOid,mergeable,mergeStateStatus,reviewDecision,statusCheckRollup,autoMergeRequest` | 30 s for the first 10 min, then 2 min. Results are accepted only when `headRefOid == candidate_sha` |
 | 11 | Approvals | GitHub `reviewDecision` per known policy | AI reviews never count as GitHub approvals, and ATLAS never submits GitHub reviews |
-| 12 | Merge (outbox) | `gh pr merge <n> --squash --match-head-commit <candidate_sha>` | Only after G-MERGE-PRE, re-run right before execution. Never `--admin`, never `--auto` |
+| 12 | Merge (outbox) | `gh pr merge <n> --squash --match-head-commit <candidate_sha>` | Only after the user approves the merge in ATLAS (D6) **and** G-MERGE-PRE passes again right before execution. Never `--admin`, never `--auto` |
 | 13 | Confirm | `gh pr view <n> --json state,mergeCommit,headRefOid,baseRefName` | G-MERGED: merged head == candidate, base and repo match. A queued merge → `MERGE_PENDING_REMOTE` |
 | 14 | Update local | `git -C repo fetch origin <base>` and verify `mergeCommit` is reachable | |
 | 15 | Cleanup | `git -C repo worktree remove <wt>`; delete the remote branch (outbox); keep the local branch and snapshot refs for 7 days | |
@@ -47,7 +47,7 @@ Merging is allowed only if **all** of the following hold:
 - The known review requirement is satisfied: `reviewDecision == APPROVED` when reviews are required.
 - `mergeable == MERGEABLE`, and `mergeStateStatus` ∈ {`CLEAN`, `HAS_HOOKS`}.
 - ATLAS gates G-TEST, G-REV and G-QA hold for the same candidate, and no blocking finding from any source is open.
-- Merge authorisation: `auto_merge: true` in the current policy version, or an approval bound to this candidate + policy version and not expired.
+- Merge authorisation: a user approval bound to this candidate + policy version and not expired. `auto_merge: true` is **rejected by the config schema in this release** (D6, ATLAS-D11).
 - The repo lock is held and no other ATLAS merge op is in flight for this repository.
 
 **Merge queues and implicit auto-merge (ATLAS-008).** `gh` enqueues on merge-queue branches, and may arm auto-merge when checks are pending. ATLAS handles this as follows:
@@ -56,7 +56,7 @@ Merging is allowed only if **all** of the following hold:
 - If the PR gets dequeued, auto-merge is disabled, or the head changes, ATLAS returns to CI_VALIDATION.
 - Merge-group CI failures go to FIXING or BLOCKED.
 
-**Authorisation while pending (ATLAS-008 r3).** A queued or armed merge is merely *authorised to proceed*. While in `MERGE_PENDING_REMOTE`, ATLAS re-evaluates G-MERGE-PRE on every poll. If the authorisation lapses, ATLAS moves to `CANCELLING_REMOTE_MERGE` and issues an outbox `cancel_remote_merge` op. Lapses include: approval expired or revoked, policy version changed, `auto_merge` turned off, new blocking finding, or protection changed.
+**Authorisation while pending (ATLAS-008 r3).** A queued or armed merge is merely *authorised to proceed*. While in `MERGE_PENDING_REMOTE`, ATLAS re-evaluates G-MERGE-PRE on every poll. If the authorisation lapses, ATLAS moves to `CANCELLING_REMOTE_MERGE` and issues an outbox `cancel_remote_merge` op. Lapses include: the user's merge approval expired or was revoked, policy version changed, new blocking finding, or protection changed. This handles GitHub-side queued or implicitly armed merges. ATLAS's own auto-merge doesn't exist in this release (D6).
 - An armed auto-merge is cancelled with `gh pr merge <n> --disable-auto` (flag present in `evidence/gh-pr-merge-help.txt`).
 - A merge-queue entry is cancelled with the GraphQL `dequeuePullRequest` mutation via `gh api graphql`. *To verify in Phase 5.*
 
@@ -83,8 +83,8 @@ Phase 5 ships merge-queue support behind `merge_queue_support: false`. It can be
 - It never treats a merged PR whose head ≠ candidate as gated delivery.
 
 ## 7. Credentials
-- The default is the existing `gh` keyring login, with scopes `repo`, `workflow`, `read:org` and `gist`.
-- Recommended (D3): a per-project fine-grained PAT in Keychain, injected as `GH_TOKEN` only into gh/git subprocesses started by the GitHub service. Git push uses `gh auth git-credential`, so tokens never land in git config or URLs.
+- **D3:** each project uses the user's PAT, which ATLAS reads from the macOS Keychain (`atlas.<project_id>.github`, stored by the user). Before it is ever used, ATLAS checks it with the read-only permission probe (`verify-github-pat` logic). **There is no fallback** to the broad `gh` keyring login (`gho_`, scopes `repo`/`workflow`/`read:org`/`gist`). A missing or under-privileged PAT gives `BLOCKED(github_credential)` (ATLAS-D12).
+- The PAT is injected as `GH_TOKEN` only into gh/git subprocesses started by the GitHub service. Git push uses `gh auth git-credential`, so tokens never land in git config or URLs.
 - These subprocesses run outside the test sandbox. Tests and agents never receive the token (security-model.md §3.3).
 
 ## 8. Testing strategy

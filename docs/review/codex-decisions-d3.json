@@ -1,0 +1,26 @@
+{
+  "verdict": "changes_required",
+  "summary": "ATLAS-D11, ATLAS-D21 and ATLAS-D22 are fully resolved. ATLAS-D08 remains partially unresolved: per-execution storage is bounded, but host capacity is checked rather than reserved. One new MEDIUM defect was introduced by the effective-view attestation fix. No files modified.",
+  "findings": [
+    {
+      "id": "ATLAS-D08",
+      "severity": "HIGH",
+      "category": "resource_containment",
+      "file": "docs/security-model.md",
+      "location": "§5.1.8, lines 226–228",
+      "description": "The host-disk protection still depends on a free-space observation rather than a capacity reservation. Preallocating ext4 backing files inside the VM does not establish that the Colima disk's remaining host capacity has been reserved.",
+      "evidence": "Line 227 checks host free space against the VM's remaining possible growth plus 10 GB, then claims that 'Preallocation means the host allocation can't grow past what was checked.' Other host processes can consume that free space after the check, while the VM disk can continue growing toward its cap. The recovery in line 228 addresses a full VM disk, not exhaustion of the host filesystem holding ATLAS databases and the VM image.",
+      "recommendation": "Reserve or fully preallocate the VM's backing capacity on the host, preserve host headroom, and verify that allocation before admitting executions. Define fail-closed recovery for host backing-store exhaustion separately from guest ENOSPC."
+    },
+    {
+      "id": "ATLAS-D31",
+      "severity": "MEDIUM",
+      "category": "candidate_integrity",
+      "file": "docs/security-model.md",
+      "location": "§5.1.3, lines 141–150",
+      "description": "The new effective-view attestation rejects legitimate contents of declared writable dependency directories, making ordinary dependency setup unable to produce valid test evidence.",
+      "evidence": "Line 141 explicitly permits populated writable areas such as node_modules and .venv. Line 143 requires walking the effective /work view but permits only 'declared writable mountpoints' as extra entries. After setup, node_modules/package/index.js and .venv/bin/python are extra entries below those mountpoints, rather than declared mountpoints themselves. They cannot equal the candidate manifest byte for byte as required by line 150.",
+      "recommendation": "Define separate comparisons for the immutable source volume and the effective mount view. In the latter, permit descendants within validated writable mounts while still requiring every tracked entry to match and rejecting extras outside those mounts. Verify a successful setup-and-test execution with a populated dependency directory."
+    }
+  ]
+}

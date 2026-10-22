@@ -71,7 +71,7 @@ There is no Redis, broker or Postgres. A single process with SQLite is enough at
     project.yaml           # project config (copied from user input; repo copy is NOT trusted)
     repo/                  # primary clone (never edited directly; base for worktrees)
   worktrees/<project_id>/<phase_id>/   # developer worktree, one per active phase (agents only; never used for evidence)
-  sandboxes/<execution_id>/            # per test/QA run: detached verification worktree (wt/), TMPDIR, HOME, outputs
+  sandboxes/<execution_id>/            # per run: QA verification worktree (wt/) or the extracted, validated /out of a test container (nothing on the host is mounted into the Colima VM)
   snapshots/<execution_id>/            # preserved index/worktree state before any reset
   run/<execution_id>.json              # launcher run files (process discovery)
   artifacts/<sha256>       # content-addressed blobs: prompts, agent output, diffs, logs, test reports
@@ -134,8 +134,9 @@ Config is layered: built-in safe defaults → `~/.atlas/config.yaml` → `~/.atl
 Safe defaults (must hold with an empty config):
 
 ```yaml
-execution:  { mode: supervised, max_active_phases_per_repository: 1, max_review_cycles: 3, max_repair_attempts: 3 }
-git:        { use_worktrees: true, create_pull_requests: true, auto_merge: false, merge_strategy: squash }
+execution:  { mode: supervised,   # only value accepted in this release (D7)
+              max_active_phases_per_repository: 1, max_review_cycles: 3, max_repair_attempts: 3 }
+git:        { use_worktrees: true, create_pull_requests: true, auto_merge: false, merge_strategy: squash }  # auto_merge: true rejected (D6)
 quality:    { require_tests: true, require_code_review: true, require_independent_qa: true,
               block_on_critical_findings: true, block_on_high_findings: true }
 capacity:   { on_quota_exhausted: pause, allow_agent_substitution: false,
@@ -160,7 +161,7 @@ The default role assignment follows the brief. The policy engine enforces **ADR-
 | plan challenger | codex | claude (only if plan author ≠ claude) |
 | developer | codex | claude |
 | code reviewer | claude | codex (only if developer ≠ codex) |
-| QA | antigravity (manual) | the non-developer headless agent, with explicit per-task approval |
+| QA | antigravity (manual) | none: wait for the manual handoff (D4) |
 
 ## 10. Technology choices
 

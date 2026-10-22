@@ -1,0 +1,126 @@
+{
+  "verdict": "changes_required",
+  "summary": "Docker on Colima can provide an enforced boundary, but the updated architecture leaves candidate integrity, daemon isolation, lifecycle recovery and resource containment incomplete. D3–D7 are also not consistently propagated. These are architecture findings; no implementation was tested or files modified.",
+  "findings": [
+    {
+      "id": "ATLAS-D01",
+      "severity": "HIGH",
+      "category": "candidate_integrity",
+      "file": "docs/security-model.md",
+      "location": "§5.1, lines 127–129; docs/workflow-state-machine.md §0 and G-TEST, line 154",
+      "description": "Before/after hashes cannot establish that tests ran against the candidate throughout execution.",
+      "evidence": "The writable /work tree is checked before and after execution. A malicious test wrapper can save a source file, replace it with an implementation that passes tests, run tests, then restore the original bytes. Both manifests match and exit status is zero, satisfying the documented G-TEST despite testing different content. Dependency setup can perform the same substitution.",
+      "recommendation": "Keep candidate source immutable in both setup and test containers, with separate writable dependency, build and output locations. Reject projects requiring source mutation unless an equally strong execution-content invariant is defined."
+    },
+    {
+      "id": "ATLAS-D02",
+      "severity": "HIGH",
+      "category": "candidate_integrity",
+      "file": "docs/security-model.md",
+      "location": "§5.1, lines 127–129",
+      "description": "Blob hashes alone do not verify a Git tree, and the ignore exemption could exclude tracked source.",
+      "evidence": "The comparison specifies file blob IDs and rejects changes to 'non-ignored' files. Git tree identity also includes path, entry type and executable mode. Changing an executable bit leaves its blob unchanged; following symlinks hashes target contents rather than the committed link text. A tracked file can also match .gitignore and must still be verified. No collision policy is defined when Linux paths are copied onto a case-insensitive macOS filesystem.",
+      "recommendation": "Compare a complete, NUL-delimited manifest of exact paths, types, Git modes and blob IDs. Use lstat/readlink semantics, always verify tracked entries regardless of ignore rules, and reject unsupported entries or host filename collisions before execution."
+    },
+    {
+      "id": "ATLAS-D03",
+      "severity": "MEDIUM",
+      "category": "candidate_export",
+      "file": "docs/security-model.md",
+      "location": "§5.1, line 127",
+      "description": "git archive is not an unconditional export of exact committed file contents.",
+      "evidence": "The document calls the export 'exactly the committed content'. Repository attributes can omit files through export-ignore or rewrite them through export-subst, as documented in [git archive](https://git-scm.com/docs/git-archive). The design also provides no materialization or rejection policy for gitlinks/submodules and LFS pointers. An exact preflight comparison should block these cases, but their behavior is currently unspecified.",
+      "recommendation": "Export directly from Git tree/blob objects, or neutralize archive transformations and verify every entry before any repository command runs. Explicitly reject or define candidate-bound materialization for submodules and LFS."
+    },
+    {
+      "id": "ATLAS-D04",
+      "severity": "HIGH",
+      "category": "host_boundary",
+      "file": "docs/security-model.md",
+      "location": "§5.1, lines 128–129",
+      "description": "Copy-out and host hashing introduce an unspecified path from attacker-controlled filesystem objects back into the host.",
+      "evidence": "The complete post-run /work tree and /out are copied onto macOS and inspected there. Tests can create absolute symlinks, FIFOs and arbitrarily large output trees. A normal host-side file open can follow a copied link to a host credential path or block on a FIFO. [Docker cp](https://docs.docker.com/reference/cli/docker/container/cp/) preserves filesystem metadata and supports copying symbolic links; it does not define ATLAS's subsequent traversal safety.",
+      "recommendation": "Stop all writers before collection. Validate streamed entries without following links, reject special files and escaping paths, enforce byte/count limits, and extract into a fresh directory using containment-safe operations. Hash symlink text rather than opening its target."
+    },
+    {
+      "id": "ATLAS-D05",
+      "severity": "HIGH",
+      "category": "daemon_access",
+      "file": "docs/security-model.md",
+      "location": "§5.1, line 141; §5.2, lines 166–172",
+      "description": "The claim that only the test runner can reach Docker is not enforced by the stated controls.",
+      "evidence": "Stripping DOCKER_HOST and placing ~/.colima outside the working tree do not deny filesystem access to a Unix socket. Section 5.2 explicitly leaves agent read scope unresolved and acknowledges provider processes run as the user. A process with socket access can select the endpoint explicitly and create privileged containers or mount other execution volumes, bypassing the runner's flags.",
+      "recommendation": "Enforce socket access with an OS boundary or a separate runner identity/service. Explicitly deny socket and Docker-context access to agent tools, and test direct endpoint access rather than only environment-variable discovery."
+    },
+    {
+      "id": "ATLAS-D06",
+      "severity": "HIGH",
+      "category": "fail_closed",
+      "file": "docs/security-model.md",
+      "location": "§5.1, lines 143–158",
+      "description": "The self-test is neither bound to every execution nor sufficient to establish the actual runtime configuration.",
+      "evidence": "It runs on startup and before each project's first run. Later daemon/context changes or VM restarts can invalidate that result. Negative probes such as failed outbound access do not prove network=none; temporary connectivity failure can produce the same observation. The self-test also says the project test command runs as part of proving access, without requiring isolation verification first.",
+      "recommendation": "Bind execution to the explicit atlas daemon endpoint and inspect effective VM/container configuration before every repository command, including setup. Invalidate attestations on runtime/configuration changes. Run trusted canaries before repository code, and define separate checks for approved network-enabled profiles."
+    },
+    {
+      "id": "ATLAS-D07",
+      "severity": "HIGH",
+      "category": "execution_lifecycle",
+      "file": "docs/security-model.md",
+      "location": "§5.1, lines 136–139; docs/recovery-strategy.md §2.2, lines 61–68",
+      "description": "Host process-group termination does not establish that Docker execution has stopped.",
+      "evidence": "Recovery declares an execution quiescent after its host pgid disappears. Containers are daemon-managed; terminating a Docker client does not prove the container or setup container is gone. The new design specifies cleanup after copying artifacts but does not add persistent container identities, daemon-side termination confirmation or restart reconciliation.",
+      "recommendation": "Persist container and volume identities before execution. On timeout, pause, cancellation and restart, stop/kill and inspect all execution containers before collecting evidence or declaring quiescence. Block when daemon state cannot be confirmed."
+    },
+    {
+      "id": "ATLAS-D08",
+      "severity": "HIGH",
+      "category": "resource_containment",
+      "file": "docs/security-model.md",
+      "location": "§5.1, lines 128 and 136–139",
+      "description": "The resource controls omit persistent storage, logs and artifact collection.",
+      "evidence": "PID, memory, CPU and wall-clock limits do not bound writes to named volumes, Docker logs or the host copy-out directory. Repository code can exhaust the shared VM disk or host disk with build outputs and reports, affecting other projects and ATLAS state availability.",
+      "recommendation": "Specify enforceable storage and log quotas, bounded tmpfs sizes, artifact byte/file-count limits and collection deadlines. Apply limits during dependency setup and image builds as well as tests."
+    },
+    {
+      "id": "ATLAS-D09",
+      "severity": "HIGH",
+      "category": "network_isolation",
+      "file": "docs/security-model.md",
+      "location": "§5.1, lines 132–138 and 162",
+      "description": "Network opt-ins lack a destination policy and weaken the asserted host boundary.",
+      "evidence": "setup_network and tests.network enable networking without excluding the host, LAN, other containers or infrastructure endpoints. Dependency installers execute repository-controlled lifecycle scripts. An opt-in for downloading dependencies therefore also permits probing reachable services. Restricted filesystem mounts do not establish the statement that a VM escape 'would not reach the rest of the host'.",
+      "recommendation": "Separate dependency-fetch egress from unrestricted integration networking. Deny host/LAN/runtime endpoints by default, define approved destinations, and test the effective policy. Describe VM escape exposure to shared sandboxes and networks accurately."
+    },
+    {
+      "id": "ATLAS-D10",
+      "severity": "MEDIUM",
+      "category": "image_build_boundary",
+      "file": "docs/security-model.md",
+      "location": "§5.1, line 138",
+      "description": "Repository Dockerfile builds have no concrete isolation contract.",
+      "evidence": "The document permits builds 'under the same constraints', but the preceding constraints are container-run flags. It does not define builder configuration, build contexts, network policy, entitlements, secret/SSH forwarding, build caches or resource limits. Pinning the resulting digest identifies the output; it does not constrain the preceding execution.",
+      "recommendation": "Disable repository Dockerfile builds initially, or define a separate isolated build service with explicit contexts, denied forwarding/entitlements, network and storage limits, and per-project caches. Record image approval and provenance separately from digest identity."
+    },
+    {
+      "id": "ATLAS-D11",
+      "severity": "HIGH",
+      "category": "decision_consistency",
+      "file": "docs/risks-and-decisions.md",
+      "location": "D6–D7, lines 43–44; docs/workflow-state-machine.md lines 54 and 161; docs/github-integration.md §3, line 50",
+      "description": "Executable policy descriptions still permit bypassing the newly required human approvals.",
+      "evidence": "D6 requires user approval for every merge, but G-MERGE-PRE and GitHub merge eligibility still accept auto_merge:true instead of an approval. D7 requires approval of every plan, while workflow line 54 still permits autonomous advancement on a challenger verdict. Safe defaults alone do not remove these supported paths.",
+      "recommendation": "Reject auto_merge:true and autonomous plan mode in the current release schema, and update guards and transitions to require the approved human authorization. Keep future opt-ins explicitly disabled until a new decision."
+    },
+    {
+      "id": "ATLAS-D12",
+      "severity": "MEDIUM",
+      "category": "decision_consistency",
+      "file": "docs/risks-and-decisions.md",
+      "location": "D3–D5, lines 40–42; docs/github-integration.md §7, lines 86–87; docs/antigravity-manual-handoff.md §7, line 250; docs/agent-compatibility.md line 100",
+      "description": "Credential selection, wait-only QA and public-repository policy retain conflicting operational instructions.",
+      "evidence": "D3 selects the existing PAT pending verification, while GitHub §7 defaults to the broad gh keyring login. D4 selects waiting and reminders, while the handoff runbook still offers per-task reassignment and roadmap Phase 4 includes it. D5 defers reconsideration until a public repo is registered, while agent compatibility already permits a logged override. D4's narrower phrase 'No automatic reassignment' also leaves its intended wait-only scope ambiguous.",
+      "recommendation": "Propagate the decisions into operational docs and configuration. Require verified credential selection without silent keyring fallback; explicitly resolve whether manual reassignment remains authorized; disable the public-repository override pending reconsideration."
+    }
+  ]
+}

@@ -38,7 +38,7 @@ Phase 6 adds only auto-resume, capacity scheduling and the full fault-injection 
   - Claude: `--setting-sources user` vs project CLAUDE.md/skills; usage-limit result shape; auth probe; OS sandbox via settings.
   - Codex: `--ignore-user-config` + `-c` pins and the effective config; read scope of sandboxed commands; `workspace-write` network; limit/auth failure signatures.
   - Use tiny prompts to save quota.
-- 2.1 `atlas-exec` launcher + supervisor: durable launch handshake, run files, process groups, quiesce protocol, timeouts, artefacts, redaction, env scrub.
+- 2.1 `atlas-exec` launcher + supervisor: durable launch handshake, run files, process groups, quiesce protocol, timeouts, artefacts, redaction, env scrub. Also the **outer Seatbelt wrapper for agent processes**, which denies `~/.colima`, `~/.docker`, `~/.atlas` and Docker sockets. Spike test: an agent command can't reach the Docker socket; shell-capable roles are BLOCKED if the wrapper fails (security-model.md §5.1.9).
 - 2.2 Blob store + `artifact_refs` + `executions`.
 - 2.3 `AgentAdapter` protocol, `FakeAdapter` fixture replay, capability probe (version + help hash + required flags).
 - 2.4 `ClaudeAdapter`, `CodexAdapter`, and `ManualHandoffAdapter` (packet + import validation, criteria completeness).
@@ -61,9 +61,20 @@ Phase 6 adds only auto-resume, capacity scheduling and the full fault-injection 
 
 ## Phase 4 — Implementation workflow (local only, no GitHub)
 - Worktree manager; developer execution; **candidate commits** and staleness; diff guards; snapshot-before-reset.
-- **Test sandbox** (Seatbelt profile + canary self-test, or the dedicated-user option per D11). G-TEST is impossible without it.
+- **Test sandbox: Docker on Colima** (D11; security-model.md §5.1), covering:
+  - a candidate tar built from git objects, mounted read-only;
+  - declared writable paths and size limits;
+  - the create → inspect → start contract check;
+  - a per-execution canary and in-VM manifest attestation;
+  - safe `/out` extraction;
+  - daemon-side lifecycle/recovery;
+  - the dependency egress proxy.
+
+  The **reserved APFS volume** for the Colima VM (one-time admin step by the user) and per-execution fixed-size loop filesystems are also part of this slice.
+
+  G-TEST is impossible without it. macOS-toolchain projects, source-mutating tests, submodules and LFS stay BLOCKED.
 - Code review on the candidate diff; repair loop; fix verification by an independent reviewer.
-- **Minimum QA gate:** Antigravity handoff for the candidate with a dedicated QA worktree, import, criteria completeness and verdict consistency, plus optional approved reassignment. Without a valid QA result or waiver, the phase cannot reach READY_FOR_DELIVERY.
+- **Minimum QA gate:** Antigravity handoff for the candidate with a dedicated QA worktree, import, criteria completeness and verdict consistency. No reassignment path (D4). Without a valid QA result or waiver, the phase cannot reach READY_FOR_DELIVERY.
 
 **Acceptance:** on a local fixture repo, one phase reaches READY_FOR_DELIVERY with these, all bound to one candidate:
 - tests `executed` inside the sandbox;
@@ -77,7 +88,7 @@ A new fix makes the earlier evidence stale. A failing test triggers a bounded re
 - `merge_queue_support` stays **off**: merge-queue and unknown-protection repos get "user merges, ATLAS verifies".
 - Outbox reconciliation for every op it introduces ships in this phase, not later.
 
-**Acceptance:** the fake-gh suite passes, covering duplicate-PR prevention, interrupted merge, external head push, approval staleness and unknown protection. A live smoke test runs on a throwaway private sandbox repo (user-approved). Auto-merge remains off by default.
+**Acceptance:** the fake-gh suite passes, covering duplicate-PR prevention, interrupted merge, external head push, approval staleness and unknown protection. A live smoke test runs on a throwaway private sandbox repo (user-approved). ATLAS auto-merge is not available in this release (D6).
 
 ## Phase 6 — Capacity & full recovery
 - `recovery.auto_resume` option, capacity-aware retry scheduling, provider session resume, and the **complete** crash-point fault-injection matrix in CI.
@@ -86,7 +97,7 @@ A new fix makes the earlier evidence stale. A failing test triggers a bounded re
 **Acceptance:** every row of the crash-point matrix (recovery-strategy.md §5) passes in CI.
 
 ## Phase 7 — QA enhancements
-- `atlas handoff import` CLI; Playwright-based UI checks executed **by ATLAS** in the sandbox (`executed` evidence); a QA dashboard; review-resolution tracking; reassignment UX.
+- `atlas handoff import` CLI; Playwright-based UI checks executed **by ATLAS** in the sandbox (`executed` evidence); a QA dashboard; review-resolution tracking.
 
 ## Phase 8 — Multi-project scheduling
 - Priority queue across projects, fairness (aging) and per-provider concurrency limits. Repo locks already exist from Phase 1.
@@ -111,4 +122,4 @@ A new fix makes the earlier evidence stale. A failing test triggers a bounded re
 | 21–22 pause on unavailability, resume after restart | 1 (safe pause) → 6 (full resume) |
 | 23 final report | 9 |
 
-**Known limitation to report at DoD:** step 11 cannot be *fully autonomous* with Antigravity, because of its terms. It completes through a user-run manual handoff, or through approved reassignment to the non-implementing headless agent.
+**Known limitation to report at DoD:** step 11 cannot be *fully autonomous* with Antigravity, because of its terms. It completes through a user-run manual handoff (D4: wait; no reassignment).

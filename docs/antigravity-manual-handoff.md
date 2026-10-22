@@ -247,7 +247,7 @@ Output ONLY JSON matching result.schema.json with "step": "{{step}}", "nonce": "
 - **Expiry:** a packet expires after `handoff.expiry_hours`, which defaults to 72 hours. Expired packets can be regenerated with one click. The new packet gets a new nonce.
 - **Reminders:** the dashboard badge persists, and an optional daily notification is sent.
 - **Skip:** QA can be skipped only if `quality.require_independent_qa` is `false` for the project. ATLAS writes a waiver to the audit log with your reason, and the final report lists the phase as **"QA waived by user"**.
-- **Reassign:** with per-task approval, QA may go to the headless agent that is *not* the developer (for example Claude when Codex implemented). The UI states that Antigravity was not used.
+- **Reassign: not available (D4 = wait).** QA stays with Antigravity until you import a result. Reassigning QA to another agent would need a new decision.
 - **If Antigravity finds problems** (`changes_required`): the phase returns to `FIXING`. After the fix, a **new** handoff packet is generated for re-verification. ATLAS does not accept the developer's claim that a finding is fixed.
 
 ## 8. Troubleshooting

@@ -1,0 +1,5 @@
+{
+  "verdict": "approved",
+  "summary": "Both findings are fully resolved. ATLAS-D08: docs/security-model.md §5.1.8, lines 231–238 requires dedicated APFS storage with reserve = quota, verifies reservation and VM data placement before execution, and defines separate host-low-space and guest-full recovery; docs/risks-and-decisions.md D11, line 49 records the required setup. ATLAS-D31: docs/security-model.md §5.1.3, lines 143–154 separates exact source equality from effective-view comparison, permits populated writable-mount descendants, requires every tracked entry to match, rejects other extras, and requires a populated-dependency fixture. No new CRITICAL or HIGH defect introduced by these fixes was identified. This verifies the documented architecture, not implementation. No files modified.",
+  "findings": []
+}

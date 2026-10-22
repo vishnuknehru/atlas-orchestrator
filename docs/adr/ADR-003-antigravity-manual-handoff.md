@@ -16,5 +16,5 @@
 
 ## Consequences
 - QA through Antigravity needs the user to be present. The Definition of Done reports this limitation explicitly.
-- Fallback (opt-in, per task): reassign QA to the headless agent that did not implement the phase. The UI shows that Antigravity was not used.
+- Fallback: **none in this release** (decision D4 = wait). The phase stays AWAITING_MANUAL with reminders. Reassignment to another agent would need a new decision.
 - **Revisit when** Google publishes explicit permission for local programmatic invocation on consumer plans. Any future headless adapter will be a separately challenged phase.

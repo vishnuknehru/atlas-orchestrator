@@ -1,0 +1,46 @@
+{
+  "verdict": "changes_required",
+  "summary": "Architecture-only review; no files modified. Fully resolved: ATLAS-D01–D07, D09–D10 and D12. Partially resolved: D08 and D11, re-reported below. Two new defects identified.",
+  "findings": [
+    {
+      "id": "ATLAS-D08",
+      "severity": "HIGH",
+      "category": "resource_containment",
+      "file": "docs/security-model.md",
+      "location": "§5.1.8, lines 213–216; §5.1.1, line 124",
+      "description": "Polling volume usage does not enforce storage isolation between executions, and a size-capped VM disk does not establish the claimed host-disk protection.",
+      "evidence": "Persistent writes are checked using 'du ... polled', with termination only after exceeding the limit. A repository can fill the shared VM filesystem between polls, preventing unrelated executions and Docker cleanup from progressing. The dedicated VM disk bounds its maximum size but the text reserves no host capacity; growth toward that cap can still exhaust a host with less free space.",
+      "recommendation": "Enforce per-execution filesystem quotas or bounded writable filesystems. Reserve or preallocate VM backing storage with host headroom before execution, and define recovery when the shared VM disk is full."
+    },
+    {
+      "id": "ATLAS-D11",
+      "severity": "MEDIUM",
+      "category": "decision_consistency",
+      "file": "docs/security-model.md",
+      "location": "§4, line 110; docs/github-integration.md §3, line 59",
+      "description": "The merge guards were corrected, but operational policy still contradicts D6.",
+      "evidence": "The destructive-operation table still allows auto-merge through 'Per project, explicit opt-in'. GitHub integration still lists 'auto_merge turned off' as a pending-authorization transition. Both conflict with the schema rejection and mandatory candidate-bound user approval in workflow-state-machine.md §G-MERGE-PRE, line 160.",
+      "recommendation": "Mark auto-merge unavailable in this release throughout the policy and remove configuration transitions that assume it can be enabled. Preserve separate handling of GitHub's queued or implicitly armed merge requests."
+    },
+    {
+      "id": "ATLAS-D21",
+      "severity": "HIGH",
+      "category": "candidate_integrity",
+      "file": "docs/security-model.md",
+      "location": "§5.1.2–5.1.3, lines 132 and 140–149",
+      "description": "Writable mount validation does not address symlink components, allowing a lexical path check to miss an overlay of tracked source.",
+      "evidence": "Internal symlinks are permitted, while writable declarations are rejected only when they cover a manifest path. For example, tracked 'alias -> src' plus tracked 'src/generated/module.py' leaves 'alias/generated' without a lexical tracked descendant. Resolving that mount destination through the symlink can overlay '/work/src/generated'. The helper attests the underlying source volume rather than the repository container's mounted view, so its manifest can remain unchanged while tests see replacement files.",
+      "recommendation": "Reject writable destinations containing symlink components, normalize and validate every destination against tracked paths, and attest the effective repository-container mount view. Add an adversarial fixture covering an internal symlink to a tracked directory."
+    },
+    {
+      "id": "ATLAS-D22",
+      "severity": "MEDIUM",
+      "category": "fail_closed",
+      "file": "docs/security-model.md",
+      "location": "§5.1.4, lines 168–175; §5.1.6, lines 190–194",
+      "description": "The mandatory canary contract makes approved network-enabled dependency setup impossible.",
+      "evidence": "The canary must run in an 'identical container' and assert that only the loopback interface exists. The approved setup profile instead joins an internal Docker network and must demonstrate access to an allowed registry through its proxy. That container necessarily needs a non-loopback network interface. Applying both requirements fails every network-enabled setup; bypassing the canary to make setup work would violate the fail-closed contract.",
+      "recommendation": "Define separate mandatory canary contracts for network-none tests and proxy-only setup. Verify the setup network membership, proxy-only routing and destination restrictions before any installer or lifecycle script runs."
+    }
+  ]
+}

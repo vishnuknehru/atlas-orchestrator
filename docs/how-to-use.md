@@ -1,8 +1,8 @@
 # How to use ATLAS: a step-by-step guide
 
-> **Read this first: ATLAS is not usable yet.**
-> ATLAS has finished Phase 0 (design only). No ATLAS code exists, so commands such as `atlas serve` don't work yet.
-> This guide shows how ATLAS **will** be used, according to the approved design. Each step has an **Available:** tag such as **[P1]** naming the roadmap phase that delivers it ([implementation-roadmap.md](implementation-roadmap.md)). A step tagged **[today]** can be done now, to get ready.
+> **Current Status: Phase 1 (Core Foundation) is live.**
+> You can now install ATLAS (`uv sync --extra dev`), start the local orchestrator and dashboard (`uv run atlas serve`), register projects, create tasks, and pause, resume, cancel, or rebuild them.
+> Each step below has an **Available:** tag such as **[P1]** naming the roadmap phase that delivers it ([implementation-roadmap.md](implementation-roadmap.md)). Steps tagged **[today]** and **[P1]** work now; agent execution (**[P2–P3]**), Colima Docker sandbox testing (**[P4]**), and GitHub PR delivery (**[P5]**) fail closed until their respective phases are completed.
 > Details may change slightly during implementation. When they do, this guide is updated in the same PR.
 
 ---
@@ -142,8 +142,8 @@ ATLAS checks the token's permissions automatically when you register the project
 ```bash
 git clone https://github.com/<owner>/atlas-orchestrator.git   # the URL of the ATLAS repository
 cd atlas-orchestrator
-uv sync                 # installs ATLAS (exact steps finalised in Phase 1 / Phase 10)
-atlas serve             # starts ATLAS and opens the dashboard in your browser
+uv sync --extra dev     # installs ATLAS and its dependencies into .venv
+uv run atlas serve      # starts ATLAS on 127.0.0.1:8420 and opens the dashboard in your browser
 ```
 - The dashboard runs only on your computer (`127.0.0.1`) and is protected by a per-install session token.
 - ATLAS keeps its data in `~/.atlas/`: databases, logs and artefacts.
@@ -246,7 +246,9 @@ If a project doesn't fit, its testing is blocked. ATLAS never falls back to runn
 **Available:** [P1 registration and token check, P5 token use and protection discovery]
 1. Open **Dashboard → Projects → Register repository**.
 2. Enter the repository as `owner/name`, e.g. `<your-github-user>/my-app`. A repository can be registered only once.
-3. ATLAS shows the new project's **id**. Store the token from Step 4 under that id. The command asks for the token without showing it, so it doesn't end up in your shell history:
+3. Open **Dashboard → Settings → GitHub credentials**, paste the token from Step 4 into the project's field and choose **Save & verify**. ATLAS writes it straight to your OS secret store under `atlas.<project_id>.github`, checks it with GitHub, and never shows it again. **Remove token** deletes it and blocks the project.
+
+   You can also store it from a terminal instead. The command asks for the token without showing it, so it doesn't end up in your shell history:
    ```bash
    # macOS (Keychain)
    security add-generic-password -s "atlas.<project_id>.github" -a "<your-github-user>" -w

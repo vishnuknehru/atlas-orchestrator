@@ -180,3 +180,12 @@ Completed steps are facts in the app DB. Abandoned steps follow their recorded r
   - §5 classification and rebuild;
   - §6 serializer round-trip and hostile tests;
   - zero egress.
+
+## 9. Slice 1.0 Spike Result (2026-10-22)
+- **Result: PASS** on `langgraph==1.2.16`, `langgraph-checkpoint==4.3.0`, `langgraph-checkpoint-sqlite==3.1.2`.
+- **Empirical finding on `StrictJsonSerializer` (§6):**
+  - Dynamic `langgraph.types.interrupt()` persists a non-JSON `Interrupt` dataclass in `put_writes` (serialized by LangGraph's default `JsonPlusSerializer` as a `msgpack` extension type).
+  - By modelling waiting states (`AWAITING_APPROVAL`, `AWAITING_MANUAL`, `PAUSED`, `BLOCKED`) via `StateGraph` step-pair invocations (`X_begin` → `X_run` → conditional halt/`END`) and `interrupt_before` boundaries, 100% of checkpoint payloads are pure UTF-8 JSON primitives (`('json', b'...')`) validated by `StrictJsonSerializer` with zero non-JSON types, zero `msgpack`, and zero `pickle`.
+- **Partial unique index refinement on `workflow_steps` (§3, ATLAS-L21):**
+  - Replaced table-level `UNIQUE(entity_id, node, entry_version)` with `CREATE UNIQUE INDEX ux_workflow_steps_non_abandoned ON workflow_steps(entity_id, node, entry_version) WHERE status <> 'abandoned'` alongside `one_unfinished_step`, allowing an `abandoned` step routing `X_run → X_begin` (with no FSM version bump) to allocate a fresh `step_id` at the same `entry_version`.
+- All §3 crash-window tests, §4 pause fence and overlay-completion tests, §5 thread classification and audited rebuild tests, §6 hostile payload rejection tests, and §1 zero-egress tests pass in [`tests/test_langgraph_engine.py`](../../tests/test_langgraph_engine.py).

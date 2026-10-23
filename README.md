@@ -8,8 +8,9 @@ ATLAS is a self-hosted, local-first orchestrator for **macOS and Linux**. It coo
 
 Each person runs their own copy with their own accounts ([ADR-007](docs/adr/ADR-007-portable-pluggable-providers.md)).
 
-> **Status: Phase 0 — feasibility and architecture only.** There is no runnable code yet.
-> Start with [`docs/architecture.md`](docs/architecture.md) and [`docs/risks-and-decisions.md`](docs/risks-and-decisions.md).
+> **Status: Phase 1 — Core Foundation implemented.**
+> Run `uv sync --extra dev` and `uv run atlas serve` to start the local ATLAS server and dashboard on `127.0.0.1:8420`.
+> Start with [`docs/how-to-use.md`](docs/how-to-use.md), [`docs/architecture.md`](docs/architecture.md), and [`docs/risks-and-decisions.md`](docs/risks-and-decisions.md).
 
 ## Phase 0 documents
 

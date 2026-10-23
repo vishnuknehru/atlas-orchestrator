@@ -136,3 +136,65 @@ def test_agent_api_key_only_for_api_key_agents(tmp_path: Path) -> None:
     assert client.delete("/api/v1/agents/claude-api/api-key", headers=headers).status_code == 200
     assert store.get_secret("atlas.agent.claude-api") is None
     assert json.dumps(client.get("/api/v1/settings").json()["agent_api_keys"]) == '{"claude-api": false}'
+
+
+def test_project_edit_updates_config_and_rejects_duplicate_and_blank_names(tmp_path: Path) -> None:
+    client, headers = _client(tmp_path, InMemorySecretStore())
+    project_id = _register(client, headers)
+    result = client.put(
+        f"/api/v1/projects/{project_id}/config", headers=headers,
+        json={"name": "  Renamed project  ", "base_branch": "develop"},
+    )
+    assert result.status_code == 200, result.text
+    assert result.json()["name"] == "Renamed project"
+    assert result.json()["base_branch"] == "develop"
+    config = json.loads(result.json()["config_json"])
+    assert config["project"]["name"] == "Renamed project"
+    assert config["project"]["base_branch"] == "develop"
+    assert client.put(f"/api/v1/projects/{project_id}/config", headers=headers, json={"name": "   "}).status_code == 422
+    second = client.post("/api/v1/projects", headers=headers, json={"name": "Other", "repository": "octocat/other"})
+    assert second.status_code == 201
+    duplicate = client.put(f"/api/v1/projects/{project_id}/config", headers=headers, json={"name": "Other"})
+    assert duplicate.status_code == 409
+    assert client.get(f"/api/v1/projects/{project_id}").json()["name"] == "Renamed project"
+
+
+def test_remove_and_restore_project_preserves_history_and_filters_workspace(tmp_path: Path) -> None:
+    client, headers = _client(tmp_path, InMemorySecretStore())
+    project_id = _register(client, headers)
+    task = client.post(f"/api/v1/projects/{project_id}/tasks", headers=headers, json={"title": "Draft", "request_text": "Work"})
+    assert task.status_code == 201
+    task_id = task.json()["id"]
+    # Unfinished and paused work must never disappear while it can still execute.
+    assert client.delete(f"/api/v1/projects/{project_id}", headers=headers).status_code == 409
+    cancelled = client.post(f"/api/v1/tasks/{task_id}/cancel", headers=headers)
+    assert cancelled.status_code == 200, cancelled.text
+    assert cancelled.json()["state"] == "CANCELLED"
+    before = client.get(f"/api/v1/tasks/{task_id}").json()["timeline"]
+    removed = client.delete(f"/api/v1/projects/{project_id}", headers=headers)
+    assert removed.status_code == 200, removed.text
+    assert removed.json()["status"] == "archived"
+    assert client.get("/api/v1/projects").json() == []
+    assert client.get("/api/v1/settings").json()["projects"] == []
+    assert client.get("/api/v1/overview").json()["tasks"] == []
+    assert client.get("/api/v1/overview").json()["projects"] == []
+    assert client.get("/api/v1/projects?archived=true").json()[0]["id"] == project_id
+    assert client.get(f"/api/v1/tasks/{task_id}").json()["timeline"] == before
+    assert client.post(f"/api/v1/projects/{project_id}/tasks", headers=headers, json={"title": "Blocked", "request_text": "No"}).status_code == 404
+    assert client.put(f"/api/v1/projects/{project_id}/config", headers=headers, json={"name": "Hidden"}).status_code == 409
+    restored = client.post(f"/api/v1/projects/{project_id}/restore", headers=headers)
+    assert restored.status_code == 200, restored.text
+    assert restored.json()["blocked_reason"] == "github_credential"
+    assert len(client.get("/api/v1/overview").json()["tasks"]) == 1
+    with client.app.state.db.read_conn() as conn:
+        actions = [r["action"] for r in conn.execute("SELECT action FROM audit_log WHERE project_id = ?;", (project_id,))]
+    assert "project_archived" in actions
+    assert "project_restored" in actions
+
+
+def test_project_removal_requires_csrf_and_handles_unknown_ids(tmp_path: Path) -> None:
+    client, headers = _client(tmp_path, InMemorySecretStore())
+    project_id = _register(client, headers)
+    assert client.delete(f"/api/v1/projects/{project_id}").status_code == 403
+    assert client.delete("/api/v1/projects/missing", headers=headers).status_code == 404
+    assert client.post("/api/v1/projects/missing/restore", headers=headers).status_code == 404

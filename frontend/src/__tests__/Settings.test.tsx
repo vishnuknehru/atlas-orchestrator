@@ -103,4 +103,15 @@ describe("Settings page", () => {
     expect(agents.codex.adapter).toBe("claude_cli");
     expect(agents.codex.endpoint).toBeNull();
   });
+  it("keeps the credential field populated when saving fails", async () => {
+    render(<Settings />);
+    const card = await screen.findByTestId("gh-cred-proj-1");
+    vi.mocked(globalThis.fetch).mockResolvedValueOnce(new Response(JSON.stringify({ detail: "Secret store unavailable" }), { status: 503 }));
+    const input = within(card).getByPlaceholderText("github_pat_…");
+    fireEvent.change(input, { target: { value: "github_pat_retry" } });
+    fireEvent.click(within(card).getByRole("button", { name: "Save & verify" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Secret store unavailable");
+    expect(input).toHaveValue("github_pat_retry");
+  });
+
 });

@@ -77,6 +77,8 @@ def _project_block_after_role_eval(
     status: str, blocked_reason: str | None, role_eval: RoleEvaluationResult
 ) -> tuple[str, str | None]:
     """Return (status, blocked_reason) after combining a project's current block with a role evaluation."""
+    if status == "archived":
+        return status, blocked_reason
     if blocked_reason is not None and blocked_reason not in _ROLE_BLOCKED_REASONS:
         return "blocked", blocked_reason
     if not role_eval.ok:
@@ -203,7 +205,7 @@ def default_gh_repo_verifier(repo: str, pat: str) -> GitHubRepoCheckResult:
 
 
 class RegisterProjectRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
     name: str = Field(min_length=1, max_length=80)
     repository: str = Field(min_length=3, max_length=140)
@@ -213,16 +215,17 @@ class RegisterProjectRequest(BaseModel):
 
 
 class UpdateProjectConfigRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
-    base_branch: str | None = None
+    name: str | None = Field(default=None, min_length=1, max_length=80)
+    base_branch: str | None = Field(default=None, min_length=1, max_length=80)
     agents: ProjectRoleMapping | None = None
     required_checks: list[str] | None = None
     writable_paths: list[str] | None = None
 
 
 class AcceptanceCriterionInput(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
     id: str | None = None
     text: str = Field(min_length=1)
@@ -232,13 +235,13 @@ class AcceptanceCriterionInput(BaseModel):
 class StoreCredentialRequest(BaseModel):
     """A credential sent once from the dashboard; it is written to the OS secret store and never returned."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
     secret: str = Field(min_length=1, max_length=512)
 
 
 class CreateTaskRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
     title: str = Field(min_length=1, max_length=200)
     request_text: str = Field(min_length=1)
@@ -418,8 +421,8 @@ def create_app(
         registry = load_agent_registry(resolved_dir)
         global_cfg = load_global_config(resolved_dir)
         with db.read_conn() as conn:
-            projects = [dict(r) for r in conn.execute("SELECT * FROM projects ORDER BY created_at DESC;").fetchall()]
-            tasks = [dict(r) for r in conn.execute("SELECT * FROM tasks ORDER BY created_at DESC;").fetchall()]
+            projects = [dict(r) for r in conn.execute("SELECT * FROM projects WHERE status != 'archived' ORDER BY created_at DESC;").fetchall()]
+            tasks = [dict(r) for r in conn.execute("SELECT tasks.* FROM tasks JOIN projects ON tasks.project_id = projects.id WHERE projects.status != 'archived' ORDER BY tasks.created_at DESC;").fetchall()]
             agents_rows = {
                 str(r["id"]): dict(r)
                 for r in conn.execute("SELECT * FROM agents ORDER BY id ASC;").fetchall()
@@ -549,7 +552,7 @@ def create_app(
         with db.read_conn() as conn:
             rows = conn.execute(
                 "SELECT id, name, github_repo, visibility, status, blocked_reason, config_json "
-                "FROM projects ORDER BY created_at DESC;"
+                "FROM projects WHERE status != 'archived' ORDER BY created_at DESC;"
             ).fetchall()
 
         projects: list[dict[str, Any]] = []
@@ -600,6 +603,8 @@ def create_app(
             proj = conn.execute("SELECT * FROM projects WHERE id = ?;", (project_id,)).fetchone()
         if not proj:
             raise HTTPException(status_code=404, detail="Project not found")
+        if proj["status"] == "archived":
+            raise HTTPException(status_code=409, detail="Restore this project before changing credentials")
         repo = str(proj["github_repo"])
         active_store = _require_store()
 
@@ -645,9 +650,11 @@ def create_app(
     @app.delete("/api/v1/projects/{project_id}/github-credential")
     def delete_github_credential(project_id: str) -> dict[str, Any]:
         with db.read_conn() as conn:
-            proj = conn.execute("SELECT github_repo FROM projects WHERE id = ?;", (project_id,)).fetchone()
+            proj = conn.execute("SELECT github_repo, status FROM projects WHERE id = ?;", (project_id,)).fetchone()
         if not proj:
             raise HTTPException(status_code=404, detail="Project not found")
+        if proj["status"] == "archived":
+            raise HTTPException(status_code=409, detail="Restore this project before changing credentials")
         active_store = _require_store()
         try:
             for service in _github_secret_services(project_id, str(proj["github_repo"])):
@@ -712,9 +719,12 @@ def create_app(
     # ------------------------------------------------------------------
 
     @app.get("/api/v1/projects")
-    def list_projects() -> list[dict[str, Any]]:
+    def list_projects(archived: bool = False) -> list[dict[str, Any]]:
         with db.read_conn() as conn:
-            rows = conn.execute("SELECT * FROM projects ORDER BY created_at DESC;").fetchall()
+            rows = conn.execute(
+                "SELECT * FROM projects WHERE (status = 'archived') = ? ORDER BY created_at DESC;",
+                (int(archived),),
+            ).fetchall()
             return [dict(r) for r in rows]
 
     @app.post("/api/v1/projects", status_code=201)
@@ -843,7 +853,7 @@ def create_app(
             if "UNIQUE constraint failed" in str(exc):
                 raise HTTPException(
                     status_code=409,
-                    detail=f"Project name or repository {repo_norm!r} is already registered (ATLAS-012)",
+                    detail=f"Project name or repository {repo_norm!r} is already registered. If it was removed, restore it under Archived projects in Settings (ATLAS-012)",
                 ) from exc
             raise
 
@@ -851,6 +861,44 @@ def create_app(
         out = dict(row)
         out["role_evaluation"] = _role_evaluation_dict(role_eval)
         return out
+
+    @app.delete("/api/v1/projects/{project_id}")
+    def remove_project(project_id: str) -> dict[str, Any]:
+        now = utc_now_iso()
+        with db.begin_immediate() as conn:
+            proj = conn.execute("SELECT * FROM projects WHERE id = ?;", (project_id,)).fetchone()
+            if not proj:
+                raise HTTPException(status_code=404, detail="Project not found")
+            if proj["status"] != "archived":
+                unfinished = conn.execute(
+                    "SELECT 1 FROM tasks WHERE project_id = ? AND state NOT IN ('COMPLETED', 'CANCELLED') LIMIT 1;",
+                    (project_id,),
+                ).fetchone()
+                if unfinished:
+                    raise HTTPException(status_code=409, detail="Finish or cancel this project's tasks before removing it. Paused tasks must be cancelled too.")
+                conn.execute("UPDATE projects SET status = 'archived', updated_at = ? WHERE id = ?;", (now, project_id))
+                _audit(conn, project_id, "project_archived", {}, now)
+            updated = conn.execute("SELECT * FROM projects WHERE id = ?;", (project_id,)).fetchone()
+        broadcaster.publish({"type": "project_archived", "project_id": project_id, "at": now})
+        return dict(updated)
+
+    @app.post("/api/v1/projects/{project_id}/restore")
+    def restore_project(project_id: str) -> dict[str, Any]:
+        registry = load_agent_registry(resolved_dir)
+        now = utc_now_iso()
+        with db.begin_immediate() as conn:
+            proj = conn.execute("SELECT * FROM projects WHERE id = ?;", (project_id,)).fetchone()
+            if not proj:
+                raise HTTPException(status_code=404, detail="Project not found")
+            if proj["status"] == "archived":
+                roles = ProjectRoleMapping.model_validate(json.loads(proj["config_json"]).get("agents", {}))
+                evaluation = evaluate_project_roles(roles, registry, repo_visibility=str(proj["visibility"]))
+                status, reason = _project_block_after_role_eval("active", proj["blocked_reason"], evaluation)
+                conn.execute("UPDATE projects SET status = ?, blocked_reason = ?, updated_at = ? WHERE id = ?;", (status, reason, now, project_id))
+                _audit(conn, project_id, "project_restored", {}, now)
+            updated = conn.execute("SELECT * FROM projects WHERE id = ?;", (project_id,)).fetchone()
+        broadcaster.publish({"type": "project_restored", "project_id": project_id, "at": now})
+        return dict(updated)
 
     @app.get("/api/v1/projects/{project_id}")
     def get_project(project_id: str) -> dict[str, Any]:
@@ -890,7 +938,22 @@ def create_app(
             if not proj:
                 raise HTTPException(status_code=404, detail="Project not found")
 
+            if proj["status"] == "archived":
+                raise HTTPException(status_code=409, detail="Restore this project before editing it")
             cfg_data = json.loads(proj["config_json"])
+            if req.name is not None:
+                cfg_data["project"]["name"] = req.name
+            if req.base_branch is not None:
+                busy = conn.execute(
+                    "SELECT 1 FROM tasks WHERE project_id = ? AND state NOT IN ('CREATED', 'COMPLETED', 'CANCELLED') LIMIT 1;",
+                    (project_id,),
+                ).fetchone()
+                if req.base_branch != proj["base_branch"] and busy:
+                    raise HTTPException(status_code=409, detail="Finish or cancel existing work before changing the base branch")
+            if req.name is not None:
+                duplicate = conn.execute("SELECT 1 FROM projects WHERE name = ? AND id != ?;", (req.name, project_id)).fetchone()
+                if duplicate:
+                    raise HTTPException(status_code=409, detail="A project with this name already exists")
             if req.base_branch is not None:
                 cfg_data["project"]["base_branch"] = req.base_branch
             if req.agents is not None:
@@ -916,10 +979,11 @@ def create_app(
             conn.execute(
                 """
                 UPDATE projects
-                SET base_branch = ?, config_json = ?, status = ?, blocked_reason = ?, updated_at = ?
+                SET name = ?, base_branch = ?, config_json = ?, status = ?, blocked_reason = ?, updated_at = ?
                 WHERE id = ?;
                 """,
                 (
+                    validated_cfg.project.name,
                     validated_cfg.project.base_branch,
                     json.dumps(validated_cfg.model_dump(mode="json")),
                     status_val,
@@ -981,7 +1045,7 @@ def create_app(
 
         with db.begin_immediate() as conn:
             proj = conn.execute(
-                "SELECT id, policy_version FROM projects WHERE id = ?;",
+                "SELECT id, policy_version FROM projects WHERE id = ? AND status != 'archived';",
                 (project_id,),
             ).fetchone()
             if not proj:
@@ -1041,57 +1105,112 @@ def create_app(
         )
         return dict(row)
 
-    @app.get("/api/v1/tasks/{task_id}")
-    def get_task(task_id: str) -> dict[str, Any]:
-        """Return task state, phases, and timeline strictly from persisted `transitions` rows."""
-        with db.read_conn() as conn:
-            task = conn.execute(
-                "SELECT * FROM tasks WHERE id = ?;", (task_id,)
-            ).fetchone()
-            if not task:
-                raise HTTPException(status_code=404, detail="Task not found")
+    def _read_task_detail(conn: Any, task_id: str) -> dict[str, Any]:
+        task = conn.execute(
+            "SELECT * FROM tasks WHERE id = ?;", (task_id,)
+        ).fetchone()
+        if not task:
+            raise HTTPException(status_code=404, detail="Task not found")
 
-            phases = [
+        phases = [
+            dict(r)
+            for r in conn.execute(
+                "SELECT * FROM phases WHERE task_id = ? ORDER BY seq ASC;",
+                (task_id,),
+            ).fetchall()
+        ]
+        phase_ids = [str(p["id"]) for p in phases]
+
+        if phase_ids:
+            ph_placeholders = ", ".join("?" for _ in phase_ids)
+            transitions = [
                 dict(r)
                 for r in conn.execute(
-                    "SELECT * FROM phases WHERE task_id = ? ORDER BY seq ASC;",
+                    f"""
+                    SELECT * FROM transitions
+                    WHERE (entity_type = 'task' AND entity_id = ?)
+                       OR (entity_type = 'phase' AND entity_id IN ({ph_placeholders}))
+                    ORDER BY at ASC, rowid ASC;
+                    """,
+                    (task_id, *phase_ids),
+                ).fetchall()
+            ]
+        else:
+            transitions = [
+                dict(r)
+                for r in conn.execute(
+                    """
+                    SELECT * FROM transitions
+                    WHERE entity_type = 'task' AND entity_id = ?
+                    ORDER BY at ASC, rowid ASC;
+                    """,
                     (task_id,),
                 ).fetchall()
             ]
-            phase_ids = [str(p["id"]) for p in phases]
-
-            if phase_ids:
-                ph_placeholders = ", ".join("?" for _ in phase_ids)
-                transitions = [
-                    dict(r)
-                    for r in conn.execute(
-                        f"""
-                        SELECT * FROM transitions
-                        WHERE (entity_type = 'task' AND entity_id = ?)
-                           OR (entity_type = 'phase' AND entity_id IN ({ph_placeholders}))
-                        ORDER BY at ASC, rowid ASC;
-                        """,
-                        (task_id, *phase_ids),
-                    ).fetchall()
-                ]
-            else:
-                transitions = [
-                    dict(r)
-                    for r in conn.execute(
-                        """
-                        SELECT * FROM transitions
-                        WHERE entity_type = 'task' AND entity_id = ?
-                        ORDER BY at ASC, rowid ASC;
-                        """,
-                        (task_id,),
-                    ).fetchall()
-                ]
-
         res = dict(task)
         res["acceptance_criteria"] = json.loads(task["acceptance_criteria_json"] or "[]")
         res["phases"] = phases
         res["timeline"] = transitions
         return res
+
+    @app.get("/api/v1/tasks/{task_id}")
+    def get_task(task_id: str) -> dict[str, Any]:
+        """Return task state, phases, and its persisted transition timeline."""
+        with db.read_conn() as conn:
+            return _read_task_detail(conn, task_id)
+
+    @app.get("/api/v1/tasks/{task_id}/history")
+    def get_task_history(task_id: str) -> dict[str, Any]:
+        """Read persisted investigation metadata; credentials and raw process arguments are excluded."""
+        with db.read_conn() as conn:
+            # One read snapshot keeps exported task state and evidence consistent.
+            conn.execute("BEGIN;")
+            task = _read_task_detail(conn, task_id)
+            project_id = task["project_id"]
+            executions = [dict(row) for row in conn.execute(
+                "SELECT id, project_id, task_id, phase_id, candidate_id, step_id, kind, agent_id, role, "
+                "model, provider, model_family, status, retry_count, git_sha, exit_code, error_class, "
+                "error_detail, correlation_id, started_at, finished_at, created_at "
+                "FROM executions WHERE task_id = ? AND project_id = ? ORDER BY created_at, id;",
+                (task_id, project_id),
+            )]
+            steps = [dict(row) for row in conn.execute(
+                "SELECT * FROM workflow_steps WHERE project_id = ? AND "
+                "((entity_type = 'task' AND entity_id = ?) OR "
+                "(entity_type = 'phase' AND entity_id IN (SELECT id FROM phases WHERE task_id = ? AND project_id = ?))) "
+                "ORDER BY created_at, step_id;", (project_id, task_id, task_id, project_id),
+            )]
+            artifacts = [dict(row) for row in conn.execute(
+                "SELECT a.* FROM artifact_refs a JOIN executions e ON a.execution_id = e.id AND a.project_id = e.project_id "
+                "WHERE e.task_id = ? AND e.project_id = ? ORDER BY a.created_at, a.id;", (task_id, project_id),
+            )]
+            approvals = [dict(row) for row in conn.execute(
+                "SELECT * FROM approvals WHERE project_id = ? AND "
+                "(task_id = ? OR phase_id IN (SELECT id FROM phases WHERE task_id = ? AND project_id = ?)) "
+                "ORDER BY requested_at, id;", (project_id, task_id, task_id, project_id),
+            )]
+            operations = [dict(row) for row in conn.execute(
+                "SELECT id, phase_id, candidate_id, step_id, op, status, attempts, remote_ref, last_error, created_at, updated_at "
+                "FROM outbox_ops WHERE project_id = ? AND phase_id IN "
+                "(SELECT id FROM phases WHERE task_id = ? AND project_id = ?) ORDER BY created_at, id;",
+                (project_id, task_id, project_id),
+            )]
+
+        def scrub(value: Any) -> Any:
+            if isinstance(value, str):
+                return redactor.redact(value)
+            if isinstance(value, list):
+                return [scrub(item) for item in value]
+            if isinstance(value, dict):
+                return {key: scrub(item) for key, item in value.items()}
+            return value
+
+        return dict(scrub({
+            "schema_version": 1, "exported_at": utc_now_iso(), "task": task,
+            "workflow_thread_id": engine.thread_id("task", task_id, int(task["generation"])),
+            "executions": executions, "workflow_steps": steps, "artifacts": artifacts,
+            "approvals": approvals, "remote_operations": operations,
+        }))
 
     @app.post("/api/v1/tasks/{task_id}/start")
     def start_task_endpoint(task_id: str) -> dict[str, Any]:

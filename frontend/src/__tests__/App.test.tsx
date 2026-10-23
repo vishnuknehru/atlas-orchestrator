@@ -1,6 +1,7 @@
 import { render, screen, waitFor, fireEvent } from "@testing-library/react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { App } from "../App";
+import { atlasApi } from "../api";
 
 const mockOverview = {
   version: "0.1.0",
@@ -101,11 +102,17 @@ const mockTaskDetail = {
 
 describe("ATLAS Dashboard v1", () => {
   beforeEach(() => {
+    window.localStorage.clear();
+    delete document.documentElement.dataset.theme;
+    window.location.hash = "#/";
     vi.restoreAllMocks();
     vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
       const url = typeof input === "string" ? input : input.toString();
       if (url.endsWith("/api/v1/overview")) {
         return new Response(JSON.stringify(mockOverview), { status: 200 });
+      }
+      if (url.endsWith("/api/v1/tasks/task-1/history")) {
+        return new Response(JSON.stringify({ task: mockTaskDetail, workflow_thread_id: "task:task-1", executions: [], workflow_steps: [], approvals: [], artifacts: [], remote_operations: [], exported_at: "2026-10-22T20:02:00Z" }), { status: 200 });
       }
       if (url.endsWith("/api/v1/tasks/task-1")) {
         return new Response(JSON.stringify(mockTaskDetail), { status: 200 });
@@ -121,8 +128,12 @@ describe("ATLAS Dashboard v1", () => {
       expect(screen.getByText("demo-app")).toBeInTheDocument();
     });
 
-    expect(screen.getByText(/Safe Restart Recovery Summary/i)).toBeInTheDocument();
-    expect(screen.getByText("Add Google OAuth login")).toBeInTheDocument();
+    expect(screen.getByText(/Work paused after restart/i)).toBeInTheDocument();
+    expect(screen.queryByText("Add Google OAuth login")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /demo-app/ }));
+    await screen.findByText("Add Google OAuth login");
+    expect(window.location.hash).toBe("#/projects/proj-1");
+    expect(screen.queryByText("Register Project")).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByText("Add Google OAuth login"));
 
@@ -130,7 +141,54 @@ describe("ATLAS Dashboard v1", () => {
       expect(screen.getByTestId("transitions-timeline")).toBeInTheDocument();
     });
 
+    await screen.findByText("task:task-1");
+    expect(screen.getByRole("button", { name: "Download history (JSON)" })).toBeEnabled();
     expect(screen.getByText("∅ → CREATED")).toBeInTheDocument();
     expect(screen.getByText("CREATED → PAUSED")).toBeInTheDocument();
+    expect(window.location.hash).toBe("#/projects/proj-1/tasks/task-1");
+    expect(screen.queryByText("Create Task")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByText("← Back to demo-app tasks"));
+    await screen.findByText("Create Task");
+    expect(screen.queryByTestId("transitions-timeline")).not.toBeInTheDocument();
   });
+  it("opens a task directly from its URL within its project", async () => {
+    window.location.hash = "#/projects/proj-1/tasks/task-1";
+    render(<App />);
+    await screen.findByTestId("transitions-timeline");
+    expect(screen.getByRole("navigation", { name: "Breadcrumb" })).toHaveTextContent("demo-app");
+    expect(screen.queryByText("Register Project")).not.toBeInTheDocument();
+    expect(screen.queryByText("Create Task")).not.toBeInTheDocument();
+  });
+  it("defaults to light and remembers the selected theme across remounts", async () => {
+    const { unmount } = render(<App />);
+    const light = screen.getByRole("button", { name: "Light" });
+    expect(light).toHaveAttribute("aria-pressed", "true");
+    expect(document.documentElement).toHaveAttribute("data-theme", "light");
+
+    fireEvent.click(screen.getByRole("button", { name: "Dark" }));
+    expect(document.documentElement).toHaveAttribute("data-theme", "dark");
+    expect(window.localStorage.getItem("atlas-theme")).toBe("dark");
+    unmount();
+    render(<App />);
+    expect(screen.getByRole("button", { name: "Dark" })).toHaveAttribute("aria-pressed", "true");
+
+    fireEvent.click(screen.getByRole("button", { name: "Light" }));
+    expect(document.documentElement).toHaveAttribute("data-theme", "light");
+    await screen.findByText("demo-app");
+  });
+
+  it("returns to the project list after confirmed project removal", async () => {
+    render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: /demo-app/ }));
+    fireEvent.click(await screen.findByText("Project settings"));
+    fireEvent.click(screen.getByRole("button", { name: "Remove project" }));
+    const remove = vi.spyOn(atlasApi, "removeProject").mockResolvedValue({ ...mockOverview.projects[0], visibility: "private", status: "archived" });
+    vi.spyOn(atlasApi, "getOverview").mockResolvedValue({ ...mockOverview, projects: [], tasks: [] });
+    fireEvent.click(screen.getByRole("button", { name: "Confirm removal" }));
+    await waitFor(() => expect(window.location.hash).toBe("#/"));
+    expect(await screen.findByText("No repositories registered yet.")).toBeInTheDocument();
+    expect(remove).toHaveBeenCalledWith("proj-1");
+    expect(screen.queryByText(/project has been removed or is unavailable/)).not.toBeInTheDocument();
+  });
+
 });

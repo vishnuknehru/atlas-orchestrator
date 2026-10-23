@@ -1,3 +1,4 @@
+import { ArchivedProjects } from "./ProjectControls";
 import React, { useCallback, useEffect, useState } from "react";
 import {
   AgentConfigEntry,
@@ -9,9 +10,9 @@ import {
 } from "./api";
 
 const inputClass =
-  "w-full bg-slate-950 border border-slate-800 rounded px-3 py-1.5 text-sm text-white";
-const labelClass = "block text-xs text-slate-400 mb-1";
-const sectionClass = "bg-slate-900/70 border border-slate-800 rounded-lg p-4 space-y-4";
+  "w-full bg-stone-50 border border-stone-200 rounded px-3 py-1.5 text-sm text-stone-900";
+const labelClass = "block text-xs text-stone-500 mb-1";
+const sectionClass = "bg-white border border-stone-200 rounded-lg p-4 space-y-4";
 const BILLING_OPTIONS: Billing[] = ["subscription", "api_key", "local"];
 
 const ADAPTER_LABELS: Record<string, string> = {
@@ -48,14 +49,14 @@ function normaliseAgent(entry: AgentConfigEntry): AgentConfigEntry {
 
 function CredentialBadge({ configured }: { configured: boolean | null }): React.ReactElement {
   if (configured === null) {
-    return <span className="text-xs text-slate-400">secret store unavailable</span>;
+    return <span className="text-xs text-stone-500">secret store unavailable</span>;
   }
   return configured ? (
-    <span className="text-xs px-2 py-0.5 rounded border bg-emerald-900/60 text-emerald-300 border-emerald-700">
+    <span className="text-xs px-2 py-0.5 rounded border bg-emerald-50 text-emerald-800 border-emerald-200">
       Stored
     </span>
   ) : (
-    <span className="text-xs px-2 py-0.5 rounded border bg-rose-900/60 text-rose-300 border-rose-700">
+    <span className="text-xs px-2 py-0.5 rounded border bg-rose-50 text-rose-800 border-rose-200">
       Not stored
     </span>
   );
@@ -73,7 +74,7 @@ function SecretForm({
   placeholder: string;
   submitLabel: string;
   disabled?: boolean;
-  onSubmit: (secret: string) => Promise<void>;
+  onSubmit: (secret: string) => Promise<boolean | void>;
 }): React.ReactElement {
   const [value, setValue] = useState("");
   const [busy, setBusy] = useState(false);
@@ -82,8 +83,8 @@ function SecretForm({
     e.preventDefault();
     setBusy(true);
     try {
-      await onSubmit(value);
-      setValue("");
+      const result = await onSubmit(value);
+      if (result !== false) setValue("");
     } finally {
       setBusy(false);
     }
@@ -108,7 +109,7 @@ function SecretForm({
       <button
         type="submit"
         disabled={disabled || busy || !value.trim()}
-        className="bg-sky-600 hover:bg-sky-500 disabled:opacity-50 text-white font-medium text-sm py-1.5 px-3 rounded"
+        className="bg-teal-800 hover:bg-teal-900 disabled:opacity-50 text-stone-900 font-medium text-sm py-1.5 px-3 rounded"
       >
         {busy ? "Saving…" : submitLabel}
       </button>
@@ -128,6 +129,7 @@ function GithubCredentialCard({
   onError: (msg: string) => void;
 }): React.ReactElement {
   const [message, setMessage] = useState<string | null>(null);
+  const [removing, setRemoving] = useState(false);
 
   const save = async (secret: string) => {
     try {
@@ -140,29 +142,32 @@ function GithubCredentialCard({
       await onChanged();
     } catch (err) {
       onError(err instanceof Error ? err.message : "Failed to store GitHub credential");
+      return false;
     }
   };
 
   const remove = async () => {
+    if (removing || !window.confirm(`Remove the GitHub token for ${project.name}? Work will be blocked until a new token is saved.`)) return;
+    setRemoving(true);
     try {
       await atlasApi.removeGithubCredential(project.id);
       setMessage("Removed. The project is blocked until a new token is stored.");
       await onChanged();
     } catch (err) {
       onError(err instanceof Error ? err.message : "Failed to remove GitHub credential");
-    }
+    } finally { setRemoving(false); }
   };
 
   return (
-    <div className="bg-slate-950 border border-slate-800 rounded p-3 space-y-3" data-testid={`gh-cred-${project.id}`}>
+    <div className="bg-stone-50 border border-stone-200 rounded p-3 space-y-3" data-testid={`gh-cred-${project.id}`}>
       <div className="flex items-center justify-between gap-2">
         <div>
-          <div className="font-medium text-sm text-white">{project.name}</div>
-          <div className="text-xs text-slate-400 font-mono">{project.github_repo}</div>
+          <div className="font-medium text-sm text-stone-900">{project.name}</div>
+          <div className="text-xs text-stone-500 font-mono">{project.github_repo}</div>
         </div>
         <div className="flex items-center gap-2">
           {project.blocked_reason && (
-            <span className="text-xs text-rose-300 font-mono">BLOCKED({project.blocked_reason})</span>
+            <span className="text-xs text-rose-800 font-mono">BLOCKED({project.blocked_reason})</span>
           )}
           <CredentialBadge configured={project.github_credential_configured} />
         </div>
@@ -175,7 +180,7 @@ function GithubCredentialCard({
         onSubmit={save}
       />
       <div className="flex items-center justify-between gap-2">
-        <p className="text-[11px] text-slate-400">
+        <p className="text-[11px] text-stone-500">
           Limit the token to this repository with contents: write, pull requests: write, checks: read
           and actions: read.
         </p>
@@ -183,13 +188,14 @@ function GithubCredentialCard({
           <button
             type="button"
             onClick={() => void remove()}
-            className="text-xs text-rose-300 hover:text-rose-200 whitespace-nowrap"
+            disabled={removing || !storeAvailable}
+            className="text-xs text-rose-800 hover:text-rose-900 whitespace-nowrap"
           >
-            Remove token
+            {removing ? "Removing…" : "Remove token"}
           </button>
         )}
       </div>
-      {message && <p className="text-xs text-slate-300">{message}</p>}
+      {message && <p className="text-xs text-stone-600">{message}</p>}
     </div>
   );
 }
@@ -231,7 +237,7 @@ function AgentFields({
       {isManual && (
         <div>
           <span className={labelClass}>Billing</span>
-          <p className="text-xs text-slate-300 bg-slate-900 border border-slate-800 rounded px-3 py-1.5">
+          <p className="text-xs text-stone-600 bg-stone-100 border border-stone-200 rounded px-3 py-1.5">
             manual: you run the tool yourself on your own subscription, then import its result. ATLAS never
             launches it (Antigravity: ADR-003).
           </p>
@@ -294,7 +300,7 @@ function AgentFields({
         />
       </label>
       {entry.endpoint && (
-        <label className="flex items-center gap-2 text-xs text-amber-300">
+        <label className="flex items-center gap-2 text-xs text-amber-800">
           <input
             type="checkbox"
             checked={entry.allow_remote_endpoint}
@@ -304,7 +310,7 @@ function AgentFields({
         </label>
       )}
       {isManual && (
-        <label className="flex items-center gap-2 text-xs text-slate-300">
+        <label className="flex items-center gap-2 text-xs text-stone-600">
           <input
             type="checkbox"
             checked={entry.declared_family_required}
@@ -375,18 +381,19 @@ function AgentRegistryEditor({
     <section className={sectionClass}>
       <div className="flex items-center justify-between">
         <div>
-          <h2 className="text-base font-semibold text-white">Agents</h2>
-          <p className="text-xs text-slate-400">
+          <h2 className="text-base font-semibold text-stone-900">Agents</h2>
+          <p className="text-xs text-stone-500">
             Saved to ~/.atlas/agents.yaml. Every project&apos;s role assignments are re-checked on save.
           </p>
         </div>
         <div className="flex items-center gap-3">
-          {saved && !dirty && <span className="text-xs text-emerald-300">Saved</span>}
+          {saved && !dirty && <span role="status" className="text-xs text-emerald-800">Saved</span>}
           {dirty && (
             <button
               type="button"
-              onClick={() => setDraft(settings.registry)}
-              className="text-xs text-slate-400 hover:text-slate-200"
+              disabled={saving}
+              onClick={() => { setDraft(settings.registry); setSaved(false); }}
+              className="text-xs text-stone-500 hover:text-stone-700"
             >
               Discard changes
             </button>
@@ -395,49 +402,50 @@ function AgentRegistryEditor({
             type="button"
             onClick={() => void save()}
             disabled={!dirty || saving}
-            className="bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white font-medium text-sm py-1.5 px-3 rounded"
+            className="bg-teal-800 hover:bg-teal-900 disabled:opacity-50 text-stone-900 font-medium text-sm py-1.5 px-3 rounded"
           >
             {saving ? "Saving…" : "Save agents"}
           </button>
         </div>
       </div>
 
-      <div className="space-y-3">
+      <fieldset disabled={saving} className="space-y-3">
         {Object.entries(draft.agents).map(([id, entry]) => {
           const savedEntry = settings.registry.agents[id];
           const keyStatus = settings.agent_api_keys[id];
           return (
-            <div key={id} className="bg-slate-950 border border-slate-800 rounded p-3 space-y-3">
+            <div key={id} className="bg-stone-50 border border-stone-200 rounded p-3 space-y-3">
               <div className="flex items-center justify-between">
-                <span className="font-semibold text-sm text-white font-mono">{id}</span>
+                <span className="font-semibold text-sm text-stone-900 font-mono">{id}</span>
                 <button
                   type="button"
                   onClick={() => remove(id)}
-                  className="text-xs text-rose-300 hover:text-rose-200"
+                  className="text-xs text-rose-800 hover:text-rose-900"
                 >
                   Remove
                 </button>
               </div>
               <AgentFields entry={entry} adapters={settings.adapters} onChange={(next) => update(id, next)} />
               {entry.billing === "api_key" && (
-                <div className="border-t border-slate-800 pt-3 space-y-2">
+                <div className="border-t border-stone-200 pt-3 space-y-2">
                   {savedEntry?.billing === "api_key" ? (
                     <>
                       <div className="flex items-center gap-2">
-                        <span className="text-xs text-slate-400">API key</span>
+                        <span className="text-xs text-stone-500">API key</span>
                         <CredentialBadge configured={keyStatus ?? null} />
                         {keyStatus && (
                           <button
                             type="button"
-                            onClick={() =>
+                            onClick={() => {
+                              if (!window.confirm(`Remove the API key for ${id}? Tasks using this agent may be blocked.`)) return;
                               void atlasApi
                                 .removeAgentApiKey(id)
                                 .then(onSaved)
                                 .catch((err: unknown) =>
                                   onError(err instanceof Error ? err.message : "Failed to remove API key")
-                                )
-                            }
-                            className="text-xs text-rose-300 hover:text-rose-200"
+                                );
+                            }}
+                            className="text-xs text-rose-800 hover:text-rose-900"
                           >
                             Remove key
                           </button>
@@ -454,25 +462,28 @@ function AgentRegistryEditor({
                             await onSaved();
                           } catch (err) {
                             onError(err instanceof Error ? err.message : "Failed to store API key");
+                            return false;
                           }
                         }}
                       />
                     </>
                   ) : (
-                    <p className="text-xs text-slate-400">Save the agents first, then add its API key here.</p>
+                    <p className="text-xs text-stone-500">Save the agents first, then add its API key here.</p>
                   )}
                 </div>
               )}
             </div>
           );
         })}
-      </div>
+      </fieldset>
 
-      <form onSubmit={add} className="flex gap-2 items-end border-t border-slate-800 pt-4">
+      <form onSubmit={add} className="flex gap-2 items-end border-t border-stone-200 pt-4">
         <label className="flex-1">
           <span className={labelClass}>New agent id</span>
           <input
             type="text"
+            required
+            disabled={saving}
             placeholder="e.g. local-reviewer"
             value={newId}
             onChange={(e) => setNewId(e.target.value)}
@@ -481,7 +492,7 @@ function AgentRegistryEditor({
         </label>
         <button
           type="submit"
-          className="bg-slate-700 hover:bg-slate-600 text-white font-medium text-sm py-1.5 px-3 rounded"
+          className="bg-stone-700 hover:bg-slate-600 text-stone-900 font-medium text-sm py-1.5 px-3 rounded"
         >
           Add agent
         </button>
@@ -502,6 +513,8 @@ function ProjectRolesCard({
   onError: (msg: string) => void;
 }): React.ReactElement {
   const [roles, setRoles] = useState<Record<string, string>>(project.roles);
+  const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState(false);
   useEffect(() => setRoles(project.roles), [project.roles]);
 
   const allowedRoles = (agentId: string): string[] => {
@@ -512,32 +525,38 @@ function ProjectRolesCard({
   const evaluation = project.role_evaluation;
 
   const save = async () => {
+    if (saving) return;
+    setSaving(true); setSaved(false);
     try {
       await atlasApi.updateProjectRoles(project.id, roles);
       await onSaved();
+      setSaved(true);
     } catch (err) {
       onError(err instanceof Error ? err.message : "Failed to save role assignments");
-    }
+    } finally { setSaving(false); }
   };
 
   return (
-    <div className="bg-slate-950 border border-slate-800 rounded p-3 space-y-3">
+    <div className="bg-stone-50 border border-stone-200 rounded p-3 space-y-3">
       <div className="flex items-center justify-between">
-        <span className="font-medium text-sm text-white">{project.name}</span>
+        <span className="font-medium text-sm text-stone-900">{project.name}</span>
         <button
           type="button"
           onClick={() => void save()}
-          disabled={!dirty}
-          className="bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white font-medium text-xs py-1 px-3 rounded"
+          disabled={!dirty || saving}
+          className="bg-teal-800 hover:bg-teal-900 disabled:opacity-50 text-stone-900 font-medium text-xs py-1 px-3 rounded"
         >
-          Save roles
+          {saving ? "Saving…" : "Save roles"}
         </button>
       </div>
+      {saved && !dirty && <p role="status" className="text-sm text-teal-800">Roles saved.</p>}
+      {dirty && <button type="button" disabled={saving} className="text-sm text-stone-500" onClick={() => { setRoles(project.roles); setSaved(false); }}>Discard role changes</button>}
       <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
         {settings.roles.map((role) => (
           <label key={role}>
             <span className={labelClass}>{role}</span>
             <select
+              disabled={saving}
               value={roles[role] ?? ""}
               onChange={(e) => setRoles({ ...roles, [role]: e.target.value })}
               className={inputClass}
@@ -555,14 +574,14 @@ function ProjectRolesCard({
         ))}
       </div>
       {evaluation.ok ? (
-        <p className="text-xs text-emerald-300">Role assignments satisfy the independence rules.</p>
+        <p className="text-xs text-emerald-800">Role assignments satisfy the independence rules.</p>
       ) : (
-        <p className="text-xs text-rose-300">
+        <p className="text-xs text-rose-800">
           BLOCKED({evaluation.blocked_reason}): {evaluation.detail}
         </p>
       )}
       {evaluation.warnings.map((w) => (
-        <p key={w} className="text-xs text-amber-300">
+        <p key={w} className="text-xs text-amber-800">
           {w}
         </p>
       ))}
@@ -574,20 +593,20 @@ function PolicyView({ config }: { config: SettingsResponse["global_config"] }): 
   return (
     <section className={sectionClass}>
       <div>
-        <h2 className="text-base font-semibold text-white">Policy</h2>
-        <p className="text-xs text-slate-400">
+        <h2 className="text-base font-semibold text-stone-900">Policy</h2>
+        <p className="text-xs text-stone-500">
           Read-only view of ~/.atlas/config.yaml. Safety-critical values are locked by ATLAS.
         </p>
       </div>
       <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
         {Object.entries(config).map(([section, values]) => (
-          <div key={section} className="bg-slate-950 border border-slate-800 rounded p-3">
-            <h3 className="text-xs font-semibold uppercase tracking-wider text-slate-400 mb-2">{section}</h3>
+          <div key={section} className="bg-stone-50 border border-stone-200 rounded p-3">
+            <h3 className="text-xs font-semibold uppercase tracking-wider text-stone-500 mb-2">{section}</h3>
             <dl className="space-y-1">
               {Object.entries(values).map(([key, value]) => (
                 <div key={key} className="flex justify-between gap-2 text-xs">
-                  <dt className="text-slate-400 font-mono">{key}</dt>
-                  <dd className="text-slate-200 font-mono">{String(value)}</dd>
+                  <dt className="text-stone-500 font-mono">{key}</dt>
+                  <dd className="text-stone-700 font-mono">{String(value)}</dd>
                 </div>
               ))}
             </dl>
@@ -618,16 +637,16 @@ export function Settings(): React.ReactElement {
   return (
     <div className="space-y-6">
       {error && (
-        <div role="alert" className="bg-rose-950/80 border border-rose-800 text-rose-200 px-4 py-3 rounded text-sm">
+        <div role="alert" className="bg-rose-50 border border-rose-200 text-rose-900 px-4 py-3 rounded text-sm">
           {error}
         </div>
       )}
       {!settings ? (
-        <p className="text-sm text-slate-400">Loading settings…</p>
+        error ? <button type="button" className="text-sm text-teal-800" onClick={() => void load()}>Retry loading settings</button> : <p role="status" className="text-sm text-stone-500">Loading settings…</p>
       ) : (
         <>
           {!settings.secret_store_available && (
-            <div className="bg-amber-950/60 border border-amber-800 text-amber-200 px-4 py-3 rounded text-sm">
+            <div className="bg-amber-50 border border-amber-200 text-amber-900 px-4 py-3 rounded text-sm">
               No OS secret store is available (macOS Keychain or Linux Secret Service). Credentials can&apos;t be
               stored until one is set up; ATLAS never falls back to plaintext files.
             </div>
@@ -635,13 +654,13 @@ export function Settings(): React.ReactElement {
 
           <section className={sectionClass}>
             <div>
-              <h2 className="text-base font-semibold text-white">GitHub credentials</h2>
-              <p className="text-xs text-slate-400">
+              <h2 className="text-base font-semibold text-stone-900">GitHub credentials</h2>
+              <p className="text-xs text-stone-500">
                 Tokens go straight to the OS secret store and are verified with GitHub. ATLAS never shows them again.
               </p>
             </div>
             {settings.projects.length === 0 ? (
-              <p className="text-sm text-slate-400">Register a project on the dashboard first.</p>
+              <p className="text-sm text-stone-500">Register a project on the dashboard first.</p>
             ) : (
               settings.projects.map((p) => (
                 <GithubCredentialCard
@@ -660,8 +679,8 @@ export function Settings(): React.ReactElement {
           {settings.projects.length > 0 && (
             <section className={sectionClass}>
               <div>
-                <h2 className="text-base font-semibold text-white">Role assignments</h2>
-                <p className="text-xs text-slate-400">
+                <h2 className="text-base font-semibold text-stone-900">Role assignments</h2>
+                <p className="text-xs text-stone-500">
                   Which agent fills each role per project. Agents whose adapter can&apos;t take a role are disabled.
                 </p>
               </div>
@@ -671,6 +690,7 @@ export function Settings(): React.ReactElement {
             </section>
           )}
 
+          <ArchivedProjects />
           <PolicyView config={settings.global_config} />
         </>
       )}

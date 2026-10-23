@@ -191,3 +191,46 @@ def test_phase_1_acceptance_register_create_pause_resume_cancel_and_safe_restart
         r_cancel = client2.post(f"/api/v1/tasks/{task_id}/cancel", headers=headers2)
         assert r_cancel.status_code == 200
         assert r_cancel.json()["state"] == "CANCELLED"
+
+
+def test_task_investigation_history_is_persisted_scoped_and_redacted(tmp_path: Path) -> None:
+    data_dir = tmp_path / "history-home"
+    client, _, csrf = _make_authed_client(data_dir)
+    headers = {"X-Atlas-CSRF": csrf, "Origin": "http://127.0.0.1:8420"}
+    project = client.post("/api/v1/projects", headers=headers, json={"name": "History", "repository": "octocat/hello-world"}).json()
+    project_id = project["id"]
+    task = client.post(f"/api/v1/projects/{project_id}/tasks", headers=headers, json={"title": "Investigate", "request_text": "Keep this request", "acceptance_criteria": [{"text": "Persist history"}]}).json()
+    task_id = task["id"]
+    other = client.post(f"/api/v1/projects/{project_id}/tasks", headers=headers, json={"title": "Other", "request_text": "Unrelated"}).json()
+    secret = "private_test_credential_0123456789"
+    client.app.state.redactor.register(secret)
+    with client.app.state.db.begin_immediate() as conn:
+        for execution_id, owner in [("run-owned", task_id), ("run-unrelated", other["id"])]:
+            conn.execute(
+                "INSERT INTO executions (id, project_id, task_id, kind, status, argv_json, error_detail, correlation_id, created_at) VALUES (?, ?, ?, 'test', 'failed', ?, ?, 'trace-1', '2026-10-22T20:00:00Z');",
+                (execution_id, project_id, owner, '["hidden_argument"]', f"Failure with {secret}"),
+            )
+        conn.execute("INSERT INTO workflow_steps (step_id, project_id, entity_type, entity_id, thread_id, generation, node, entry_version, status, created_at) VALUES ('step-owned', ?, 'task', ?, ?, 1, 'planning', 0, 'started', '2026-10-22T20:00:00Z');", (project_id, task_id, f"task:{task_id}:g1"))
+        conn.execute("INSERT INTO blobs (sha256, size, media_type, created_at) VALUES ('artifact-hash', 4, 'text/plain', '2026-10-22T20:00:00Z');")
+        conn.execute("INSERT INTO artifact_refs (id, project_id, sha256, kind, execution_id, direction, created_at) VALUES ('artifact-owned', ?, 'artifact-hash', 'test-output', 'run-owned', 'out', '2026-10-22T20:00:00Z');", (project_id,))
+    result = client.get(f"/api/v1/tasks/{task_id}/history")
+    assert result.status_code == 200, result.text
+    history = result.json()
+    assert history["task"]["request_text"] == "Keep this request"
+    assert history["task"]["acceptance_criteria"][0]["text"] == "Persist history"
+    assert history["task"]["timeline"][0]["to_state"] == "CREATED"
+    assert [run["id"] for run in history["executions"]] == ["run-owned"]
+    assert [step["step_id"] for step in history["workflow_steps"]] == ["step-owned"]
+    assert history["artifacts"][0]["sha256"] == "artifact-hash"
+    assert secret not in result.text
+    assert "[REDACTED]" in result.text
+    assert "hidden_argument" not in result.text
+    assert history["workflow_thread_id"] == f"task:{task_id}:g1"
+    # A fresh app instance reading the same files can investigate the same task.
+    reopened, _, _ = _make_authed_client(data_dir)
+    persisted = reopened.get(f"/api/v1/tasks/{task_id}/history").json()
+    assert persisted["task"]["title"] == "Investigate"
+    assert persisted["executions"][0]["id"] == "run-owned"
+    assert reopened.get("/api/v1/tasks/missing/history").status_code == 404
+    unauthenticated = TestClient(reopened.app)
+    assert unauthenticated.get(f"/api/v1/tasks/{task_id}/history").status_code == 401

@@ -75,6 +75,18 @@ export interface TaskRecord {
   timeline?: TransitionRecord[];
 }
 
+export interface TaskHistoryResponse {
+  schema_version: number;
+  exported_at: string;
+  task: TaskRecord;
+  workflow_thread_id: string;
+  executions: Array<{ id: string; kind: string; agent_id: string | null; role: string | null; model: string | null; status: string; exit_code: number | null; error_detail: string | null; correlation_id: string; started_at: string | null; finished_at: string | null }>;
+  workflow_steps: Array<{ step_id: string; node: string; status: string; generation: number; created_at: string; completed_at: string | null }>;
+  artifacts: Array<{ id: string; kind: string; sha256: string; execution_id: string | null }>;
+  approvals: Array<{ id: string; kind: string; status: string; decided_by: string | null; reason: string | null }>;
+  remote_operations: Array<{ id: string; op: string; status: string; attempts: number; last_error: string | null }>;
+}
+
 export interface OverviewResponse {
   version: string;
   recovery: {
@@ -182,6 +194,9 @@ async function apiRequest<T>(path: string, init?: RequestInit): Promise<T> {
     credentials: "same-origin",
   });
   if (!resp.ok) {
+    if (resp.status === 405) {
+      throw new Error("The server does not support this action. Restart Atlas to load the latest changes, then try again.");
+    }
     const errBody = await resp.json().catch(() => ({ detail: resp.statusText }));
     throw new Error(formatErrorDetail(errBody.detail, `HTTP ${resp.status}`));
   }
@@ -200,6 +215,13 @@ export const atlasApi = {
       method: "POST",
       body: JSON.stringify(payload),
     }),
+  updateProject: (projectId: string, payload: { name: string; base_branch: string }) =>
+    apiRequest<ProjectRecord>(`/api/v1/projects/${projectId}/config`, { method: "PUT", body: JSON.stringify(payload) }),
+  removeProject: (projectId: string) =>
+    apiRequest<ProjectRecord>(`/api/v1/projects/${projectId}`, { method: "DELETE" }),
+  getArchivedProjects: () => apiRequest<ProjectRecord[]>("/api/v1/projects?archived=true"),
+  restoreProject: (projectId: string) =>
+    apiRequest<ProjectRecord>(`/api/v1/projects/${projectId}/restore`, { method: "POST" }),
   createTask: (
     projectId: string,
     payload: {
@@ -214,6 +236,7 @@ export const atlasApi = {
       method: "POST",
       body: JSON.stringify(payload),
     }),
+  getTaskHistory: (taskId: string) => apiRequest<TaskHistoryResponse>(`/api/v1/tasks/${taskId}/history`),
   getTask: (taskId: string) => apiRequest<TaskRecord>(`/api/v1/tasks/${taskId}`),
   taskAction: (taskId: string, action: "start" | "pause" | "resume" | "cancel" | "rebuild") =>
     apiRequest<TaskRecord>(`/api/v1/tasks/${taskId}/${action}`, {

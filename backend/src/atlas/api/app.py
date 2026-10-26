@@ -634,7 +634,7 @@ def create_app(
     def run_sandbox_selftest() -> dict[str, Any]:
         """Create the canary container under the full contract and report what it saw."""
         checks = run_self_test()
-        return {"ready": all(c.ok for c in checks), "checks": [asdict(c) for c in checks]}
+        return {"ready": all(c.ok for c in checks if c.level == "required"), "checks": [asdict(c) for c in checks]}
 
     @app.get("/api/v1/settings")
     def get_settings() -> dict[str, Any]:

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import plistlib
 import subprocess
 from pathlib import Path
 from typing import Any
@@ -11,15 +10,9 @@ from typing import Any
 import pytest
 
 from atlas.sandbox import APPROVED_HELPER_IMAGE, SandboxPaths, sandbox_status, start_command
-from atlas.sandbox.checks import GIB
 from atlas.sandbox.selftest import contract_args, parse_canary, run_self_test, verify_contract
 
 GOOD_CANARY = "net lo \nuid 10001\nsocket none\nwork readonly\nrootfs readonly\ndone\n"
-
-
-def apfs(*, quota: int = 80 * GIB, reserve: int | None = None, name: str = "AtlasSandbox") -> str:
-    volume = {"Name": name, "CapacityQuota": quota, "CapacityReserve": quota if reserve is None else reserve}
-    return plistlib.dumps({"Containers": [{"Volumes": [{"Name": "Macintosh HD"}, volume]}]}).decode()
 
 
 def inspected(volume: str, execution_id: str, **overrides: Any) -> dict[str, Any]:
@@ -42,11 +35,9 @@ def inspected(volume: str, execution_id: str, **overrides: Any) -> dict[str, Any
 
 
 class FakeRunner:
-    def __init__(self, tmp: Path, *, plist: str | None = None, vm: str = "running", mounts: str = "", image: bool = True,
+    def __init__(self, tmp: Path, *, vm: str = "running", mounts: str = "", image: bool = True,
                  canary: str = GOOD_CANARY, inspect_overrides: dict[str, Any] | None = None) -> None:
-        self.paths = SandboxPaths(volume=tmp / "AtlasSandbox")
-        self.paths.colima_home.mkdir(parents=True)
-        self.plist = plist if plist is not None else apfs()
+        self.paths = SandboxPaths(profile="default", colima_home=tmp / ".colima")
         self.vm, self.mounts, self.image, self.canary = vm, mounts, image, canary
         self.inspect_overrides = inspect_overrides or {}
         self.calls: list[list[str]] = []
@@ -60,10 +51,8 @@ class FakeRunner:
         def ok(out: str = "") -> subprocess.CompletedProcess[str]:
             return subprocess.CompletedProcess(argv, 0, out, "")
 
-        if argv[:3] == ["diskutil", "apfs", "list"]:
-            return ok(self.plist)
         if argv[0] == "colima" and argv[1] == "list":
-            return ok(json.dumps({"name": "atlas", "status": self.vm.capitalize()}) + "\n")
+            return ok(json.dumps({"name": "default", "status": self.vm.capitalize()}) + "\n")
         if argv[0] == "colima" and argv[1] == "ssh":
             return ok(self.mounts or "overlay / overlay rw 0 0\n")
         assert argv[:3] == ["docker", "-H", self.paths.docker_endpoint], argv
@@ -91,24 +80,19 @@ def test_status_ready_when_every_check_passes(tmp_path: Path) -> None:
     runner = FakeRunner(tmp_path)
     status = sandbox_status(runner.paths, runner)
     assert status.ready, [c for c in status.checks if not c.ok]
-    assert [c.id for c in status.checks] == ["storage", "data_path", "vm_running", "no_host_mounts", "daemon", "image"]
+    assert [c.id for c in status.checks] == ["vm_running", "daemon", "image", "host_mounts"]
     # the sandbox is only ever addressed by its explicit endpoint, never an ambient docker context
     assert all("DOCKER_HOST" not in env for env in runner.envs)
-    assert all(env.get("COLIMA_HOME") == str(runner.paths.colima_home) for argv, env in zip(runner.calls, runner.envs, strict=True) if argv[0] == "colima")
+    assert runner.paths.docker_endpoint == f"unix://{tmp_path}/.colima/default/docker.sock"
 
 
 @pytest.mark.parametrize(
     ("kwargs", "failing", "fragment"),
     [
-        ({"plist": apfs(name="Other")}, "storage", "No APFS volume named AtlasSandbox"),
-        ({"plist": apfs(reserve=0)}, "storage", "reserve equal to quota"),
-        ({"plist": apfs(quota=10 * GIB)}, "storage", "at least 80 GB"),
         ({"vm": "stopped"}, "vm_running", "Stopped"),
-        ({"mounts": "mount0 /Users/me virtiofs rw 0 0\n"}, "no_host_mounts", "/Users/me"),
-        ({"mounts": "host /mnt 9p rw 0 0\n"}, "no_host_mounts", "/mnt"),
     ],
 )
-def test_status_fails_closed_and_stops_at_the_first_failure(tmp_path: Path, kwargs: dict[str, Any], failing: str, fragment: str) -> None:
+def test_status_fails_closed_and_stops_at_the_first_required_failure(tmp_path: Path, kwargs: dict[str, Any], failing: str, fragment: str) -> None:
     runner = FakeRunner(tmp_path, **kwargs)
     status = sandbox_status(runner.paths, runner)
     assert not status.ready
@@ -118,17 +102,24 @@ def test_status_fails_closed_and_stops_at_the_first_failure(tmp_path: Path, kwar
     assert all(c.detail == "not checked yet" for c in later)
 
 
-def test_data_path_must_exist_on_the_volume(tmp_path: Path) -> None:
-    runner = FakeRunner(tmp_path)
-    runner.paths.colima_home.rmdir()
+def test_missing_image_is_a_required_failure(tmp_path: Path) -> None:
+    status = sandbox_status(FakeRunner(tmp_path, image=False).paths, FakeRunner(tmp_path, image=False))
+    assert not status.ready and next(c for c in status.checks if not c.ok).id == "image"
+
+
+@pytest.mark.parametrize("mounts", ["mount0 /Users/me virtiofs rw 0 0\n", "host /mnt 9p rw 0 0\n"])
+def test_shared_host_folders_are_a_visible_warning_not_a_blocker(tmp_path: Path, mounts: str) -> None:
+    """Decision D16: the user accepts a shared Colima VM; the exposure is shown, not hidden."""
+    runner = FakeRunner(tmp_path, mounts=mounts)
     status = sandbox_status(runner.paths, runner)
-    assert next(c for c in status.checks if not c.ok).id == "data_path"
+    warning = next(c for c in status.checks if c.id == "host_mounts")
+    assert not warning.ok and warning.level == "warning" and "container escape" in warning.detail
+    assert status.ready
 
 
-def test_start_command_shares_nothing_and_keeps_the_docker_context() -> None:
-    cmd = start_command(SandboxPaths(volume=Path("/Volumes/AtlasSandbox")))
-    assert cmd.startswith("COLIMA_HOME=/Volumes/AtlasSandbox/colima colima start atlas")
-    assert "--mount none" in cmd and "--activate=false" in cmd and "--disk 60" in cmd
+def test_start_command_keeps_the_docker_context_and_names_non_default_profiles() -> None:
+    assert start_command(SandboxPaths(profile="default", colima_home=Path("/x"))) == "colima start --activate=false"
+    assert start_command(SandboxPaths(profile="work", colima_home=Path("/x"))) == "colima start work --activate=false"
 
 
 def test_contract_args_enforce_the_container_contract() -> None:
@@ -179,7 +170,7 @@ def test_selftest_never_starts_a_container_that_breaks_the_contract(tmp_path: Pa
 
 
 def test_selftest_does_not_touch_docker_when_the_vm_is_unsound(tmp_path: Path) -> None:
-    runner = FakeRunner(tmp_path, mounts="m /Users virtiofs rw 0 0\n")
+    runner = FakeRunner(tmp_path, vm="stopped")
     checks = run_self_test(runner.paths, runner)
     assert not all(c.ok for c in checks)
     assert "create" not in [c[0] for c in runner.docker()]
@@ -205,7 +196,7 @@ def test_api_exposes_status_and_selftest(tmp_path: Path, monkeypatch: pytest.Mon
     client = TestClient(app)
     assert client.get(f"/auth/bootstrap?token={app.state.session_token}", follow_redirects=False).status_code == 303
     body = client.get("/api/v1/sandbox").json()
-    assert body["ready"] is True and "diskutil apfs addVolume" in body["volume_command"]
+    assert body["ready"] is True and body["start_command"] == "colima start --activate=false"
     headers = {"X-Atlas-CSRF": app.state.csrf_token, "Origin": "http://127.0.0.1:8420"}
     result = client.post("/api/v1/sandbox/selftest", headers=headers).json()
     assert result["ready"] is True and any(c["id"] == "canary_network" for c in result["checks"])

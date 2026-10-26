@@ -115,13 +115,13 @@ export interface SandboxCheck {
   label: string;
   ok: boolean;
   detail: string;
+  level?: "required" | "warning";
 }
 
 export interface SandboxStatus {
   ready: boolean;
   checks: SandboxCheck[];
   start_command?: string;
-  volume_command?: string;
 }
 
 export interface RoadmapRecord {

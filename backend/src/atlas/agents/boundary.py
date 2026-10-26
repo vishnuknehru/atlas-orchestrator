@@ -17,8 +17,6 @@ from typing import Protocol
 # Never readable by an agent process. ~/.atlas also holds every other project's worktree.
 DENY_UNDER_HOME = (".atlas", ".colima", ".docker", ".ssh", ".aws", ".gnupg", ".config/gh")
 DENY_ABSOLUTE = ("/var/run/docker.sock", "/run/docker.sock")
-# The test sandbox VM and its Docker socket live on this volume (atlas.sandbox.config.VOLUME_NAME).
-DENY_VOLUMES = ("/Volumes/AtlasSandbox",)
 # Where an agent may write besides its worktree: scratch space and the CLI's own state.
 WRITE_UNDER_HOME = (".claude", ".codex", ".cache")
 
@@ -47,9 +45,6 @@ class SeatbeltBoundary:
         for j, absolute in enumerate(DENY_ABSOLUTE):
             params += ["-D", f"DENYABS{j}={absolute}"]
             denied.append(f'(literal (param "DENYABS{j}"))')
-        for v, volume in enumerate(DENY_VOLUMES):
-            params += ["-D", f"DENYVOL{v}={volume}"]
-            denied.append(f'(subpath (param "DENYVOL{v}"))')
         params += ["-D", f"TMP={_real(Path(tempfile.gettempdir()))}", "-D", "VARTMP=/private/var/tmp"]
         params += ["-D", "VARFOLDERS=/private/var/folders"]
         writes = ['(subpath (param "WORKTREE"))', '(subpath (param "TMP"))', '(subpath (param "VARTMP"))']

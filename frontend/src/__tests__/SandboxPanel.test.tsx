@@ -6,11 +6,11 @@ import { SandboxPanel } from "../SandboxPanel";
 const notReady = {
   ready: false,
   checks: [
-    { id: "storage", label: "Reserved storage", ok: false, detail: "No APFS volume named AtlasSandbox." },
-    { id: "data_path", label: "VM data is on the reserved volume", ok: false, detail: "not checked yet" },
+    { id: "vm_running", label: "Colima VM is running", ok: false, detail: "status: Stopped" },
+    { id: "daemon", label: "Docker daemon answers on the Colima socket", ok: false, detail: "not checked yet" },
+    { id: "host_mounts", label: "The VM shares no folders from your computer", ok: false, detail: "Shared into the VM: /Users/me", level: "warning" },
   ],
-  start_command: "COLIMA_HOME=/Volumes/AtlasSandbox/colima colima start atlas",
-  volume_command: "sudo diskutil apfs addVolume <container> APFS AtlasSandbox -reserve 80g -quota 80g",
+  start_command: "colima start --activate=false",
 };
 
 describe("SandboxPanel", () => {
@@ -20,9 +20,9 @@ describe("SandboxPanel", () => {
     vi.spyOn(globalThis, "fetch").mockImplementation(async () => new Response(JSON.stringify(notReady), { status: 200 }));
     render(<SandboxPanel />);
     expect(await screen.findByText("Not ready")).toBeInTheDocument();
-    expect(screen.getByText(/No APFS volume named AtlasSandbox/)).toBeInTheDocument();
-    expect(screen.getByText(/sudo diskutil apfs addVolume/)).toBeInTheDocument();
-    expect(screen.getByText(/colima start atlas/)).toBeInTheDocument();
+    expect(screen.getByText(/status: Stopped/)).toBeInTheDocument();
+    expect(screen.getByText("colima start --activate=false")).toBeInTheDocument();
+    expect(screen.getByText("warning:")).toBeInTheDocument();
   });
 
   it("runs the self-test and reports ready", async () => {
@@ -39,6 +39,6 @@ describe("SandboxPanel", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Run self-test" }));
     expect(await screen.findByText("Ready")).toBeInTheDocument();
     await waitFor(() => expect(calls).toContain("POST /api/v1/sandbox/selftest"));
-    expect(screen.queryByText(/sudo diskutil/)).not.toBeInTheDocument();
+    expect(screen.queryByText("colima start --activate=false")).not.toBeInTheDocument();
   });
 });

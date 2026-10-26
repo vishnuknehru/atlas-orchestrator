@@ -94,8 +94,9 @@ def _sandbox(action: str) -> int:
         return 0
     checks = sandbox_status().checks if action == "status" else run_self_test()
     for check in checks:
-        print(f"[{'ok' if check.ok else 'FAIL'}] {check.label}" + (f": {check.detail}" if check.detail else ""))
-    ready = all(c.ok for c in checks)
+        mark = "ok" if check.ok else ("warn" if check.level == "warning" else "FAIL")
+        print(f"[{mark}] {check.label}" + (f": {check.detail}" if check.detail else ""))
+    ready = all(c.ok for c in checks if c.level == "required")
     print("Sandbox ready." if ready else "Sandbox NOT ready. No tests will run until every check passes.")
     return 0 if ready else 1
 

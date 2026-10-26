@@ -1,6 +1,6 @@
 # Implementation Roadmap
 
-Status: Phase 0, revision 2 (after Codex review round 1) · 2026-10-22
+Status: updated 2026-10-26 after PR #19. The plan below is unchanged; each phase now carries a **Build status** block, and the section "Where we are" lists what is done, what differs from the plan and what is next.
 
 Every ATLAS phase follows **PLAN → CHALLENGE (Codex) → IMPLEMENT → TEST → REVIEW → FIX → VERIFY → COMMIT → PUSH → PR → MERGE → CHECKPOINT**. Until ATLAS can run itself (after Phase 5), this loop is driven by hand: Claude Code implements, `codex exec -s read-only` reviews, and the human approves the merge.
 
@@ -13,9 +13,41 @@ Phase 6 adds only auto-resume, capacity scheduling and the full fault-injection 
 
 **Fail-closed rule (ATLAS-017):** every release must satisfy its own safety invariants with default config. A capability that isn't built yet is **absent and disabled**, never stubbed to "pass". For example, until the test sandbox exists, G-TEST cannot pass, so no phase can reach delivery. Each phase is split into PR-sized slices (under ~600 changed lines excluding lockfiles and fixtures). Every slice leaves `main` green.
 
+## Where we are (2026-10-26)
+
+A started task now runs: **clone and scan → architect plan → independent challenge (up to 3 rounds) → user approval → developer edits a worktree in the agent sandbox → candidate commit → tests in the sandbox → evidence bound to the candidate commit.** It then stops at `EXECUTING_PHASES`, because review, QA and delivery are not built (fail-closed: nothing can complete or be pushed).
+
+| Phase | Status |
+|---|---|
+| 1 Core foundation | Done |
+| 2 Agent integration | **Partial** (agent sandbox, adapter layer; no supervisor, blob store, manifests, manual handoff, capacity) |
+| 3 Planning and challenge | Done, with gaps noted below |
+| 4 Implementation workflow | **About half** (worktrees, candidate, sandbox, test runner done; review, repair, QA, dependency install pending) |
+| 5 GitHub delivery | Not started |
+| 6–10 | Not started |
+
+### Deliberate differences from the plan
+- **D16 (amends D11):** the sandbox uses the user's existing Colima VM. No dedicated `atlas` VM, no reserved APFS volume, no loop filesystems. Shared host folders are a warning, not a blocker. See risks-and-decisions.md.
+- **Codex cannot edit files** inside the agent sandbox (its own sandbox will not nest; `docs/evidence/agent-boundary-spike-2026-10-26.md`), so **Claude Code is the default developer** and Codex the default reviewer. Defaults: architect claude, challenger codex, developer claude, reviewer codex.
+- **Files instead of tables:** analysis, plan (with challenge history), candidate and test evidence are JSON files under `~/.atlas/projects/<id>/` (`analysis/`, `plans/`, `candidates/`, `tests/`). The `plans`, `candidates`, `executions`, `artifact_refs` and `approvals` tables exist but are not used yet; they need the blob store (2.2).
+- **One candidate per task, not per phase.** The plan's steps are not materialised as `phases` rows yet; the whole plan is implemented as one candidate. Moving to per-step phases is a design decision to take before Phase 5.
+- Steps run in a background task after Start/Retry/Approve, and the dashboard polls; there is no SSE client yet.
+
+### Pending, in the suggested order
+1. **Independent code review of the candidate diff** (reviewer must pass the independence check against the developer), findings the developer must answer.
+2. **Bounded repair loop:** failing tests or blocking findings send the candidate back to the developer, then BLOCKED after the cap; any new commit makes tests and review stale.
+3. **QA gate:** manual handoff packet for the configured QA agent (Antigravity), import validation, criteria completeness, then `READY_FOR_DELIVERY` (task states and a first delivery hold; nothing is pushed).
+4. **Dependency install** for tests: egress proxy on an internal network, setup canary, per-project registry allow-list. Until then tests have no network, so the test image must already contain the dependencies.
+5. **Decide the phases model** (one candidate per plan step) and the task/phase DB rows, then Phase 5 (outbox, push, PR, CI, merge).
+6. **Held candidates:** an approval flow for guard violations (today they are only flagged).
+7. Phase 2 leftovers: supervisor with run files and crash handling, blob store and `executions`, manifest-driven adapters and capability probe, manual-handoff and OpenAI-compatible adapters, capacity manager and Agent Status screen, API-key injection (D15), Linux boundary and sandbox checks.
+8. Sandbox leftovers: safe `/out` report collection, per-run attestation of the Docker daemon, macOS-toolchain and source-mutation BLOCKED cases.
+
+
 ---
 
 ## Phase 1 — Core foundation
+**Build status: done** (merged). Not re-audited: the Playwright smoke test of slice 1.7.
 **Objective:** a working local app with persistence, projects, tasks, config, FSM, repository locks, safe restart and a basic dashboard. No agents yet.
 
 | Slice | Content | Tests |
@@ -34,6 +66,9 @@ Phase 6 adds only auto-resume, capacity scheduling and the full fault-injection 
 **Risk:** low.
 
 ## Phase 2 — Agent integration
+**Build status: partial.**
+- Done: macOS Seatbelt `AgentBoundary` (reads of `~/.atlas`, credentials and Docker sockets denied; writes only in the worktree and scratch) with spike evidence; `AgentAdapter` protocol, `FakeAdapter`, exact-value redaction and an env allowlist; one `CliAdapter` for Claude Code and Codex; typed failures (rate limit, auth, timeout, not installed, no boundary); writer requests fail closed without a boundary.
+- Not done: 2.0 spike items other than the boundary; 2.0b (Linux, local models, `credential_isolation`); 2.1 launcher/supervisor (handshake, run files, process groups, quiesce); 2.2 blob store, `artifact_refs`, `executions`; 2.3 manifests and capability probe; 2.4 `ManualHandoffAdapter` and `OpenAICompatibleHttpAdapter`; 2.5 capacity manager and Agent Status screen. The Phase 2 acceptance criteria are therefore not met.
 - 2.0 **Spike, timeboxed, results in `docs/evidence/`:** resolve every "to verify" item in agent-compatibility.md and security-model.md §5.2:
   - Claude: `--setting-sources user` vs project CLAUDE.md/skills; usage-limit result shape; auth probe; OS sandbox via settings.
   - Codex: `--ignore-user-config` + `-c` pins and the effective config; read scope of sandboxed commands; `workspace-write` network; limit/auth failure signatures.
@@ -55,12 +90,18 @@ Phase 6 adds only auto-resume, capacity scheduling and the full fault-injection 
 **Acceptance:** real auth and capacity are shown for Claude and Codex, and `MANUAL_ONLY` for Antigravity. A read-only "hello" execution per headless agent is recorded, including one local-model review through `openai_compatible_http`. A user-added manifest is refused. An API-key CLI agent without `credential_isolation: verified` is `BLOCKED(api_key_not_isolated)`.
 
 ## Phase 3 — Planning & challenge
+**Build status: done, with gaps.**
+- Done: clone (token never in argv, hooks off) and deterministic scan; architect plan with acceptance-criterion coverage; independent challenger (ADR-005 check), architect must answer every blocking finding, 3-round cap with escalation; user approve / request changes; Retry for blocked tasks.
+- Gaps: no read-only agent summary of the repository; no DAG validation or dependencies between plan steps; plans and approvals are files, not rows.
 - Repository analysis (deterministic scan, then a read-only Claude summary), plan schema with criterion IDs, DAG validation, plan revisions.
 - Codex challenge loop with planner responses, capped cycles, escalation to the user, and plan approval UI.
 
 **Acceptance:** on a fixture repo, a request yields an approved, challenged, versioned plan with every finding answered.
 
 ## Phase 4 — Implementation workflow (local only, no GitHub)
+**Build status: about half.**
+- Done: worktree manager; developer step (Claude, inside the agent boundary) producing a candidate commit; minimal diff guard (sensitive paths flagged `held`); sandbox status checks, self-test and canary; export from git objects with unsupported-feature blocking; source volume populate and attestation before/after; contract-checked containers (verified with `inspect` before `start`); per-command timeouts, kill and cleanup; orphan reaping; test evidence bound to the candidate commit with a stale flag; project test settings and dashboard panels.
+- Not done: code review and fix verification; repair loop; QA gate and `READY_FOR_DELIVERY`; dependency egress proxy and setup canary; safe `/out` extraction; held-candidate approvals (G-DIFF); snapshot-before-reset; per-run daemon/boot-id attestation; reserved disk and loop filesystems (dropped by D16); Linux self-test. The Phase 4 acceptance (one phase at `READY_FOR_DELIVERY` with tests, review and QA bound to one candidate) is not met.
 - Worktree manager; developer execution; **candidate commits** and staleness; diff guards; snapshot-before-reset.
 - **Test sandbox: Docker on Colima** (D11; security-model.md §5.1), covering:
   - a candidate tar built from git objects, mounted read-only;
@@ -85,6 +126,7 @@ Phase 6 adds only auto-resume, capacity scheduling and the full fault-injection 
 A new fix makes the earlier evidence stale. A failing test triggers a bounded repair loop and then BLOCKED. The sandbox self-test shows that `~/.atlas` and `~/.ssh` are unreadable from tests.
 
 ## Phase 5 — GitHub delivery
+**Build status: not started.** Gated on the Phase 4 acceptance; there is no push, PR, CI or merge code.
 - Outbox; push of the candidate; single PR per phase with update path; CI polling bound to the head SHA; protection discovery (known/unknown/user-declared); G-MERGE-PRE re-run before execution; merge with `--match-head-commit`; G-MERGED head verification; `MERGE_PENDING_REMOTE` handling; base update; cleanup.
 - `merge_queue_support` stays **off**: merge-queue and unknown-protection repos get "user merges, ATLAS verifies".
 - Outbox reconciliation for every op it introduces ships in this phase, not later.

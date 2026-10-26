@@ -9,17 +9,21 @@ from atlas.agents.base import (
     redact,
     scrubbed_env,
 )
+from atlas.agents.boundary import AgentBoundary, SeatbeltBoundary, get_boundary
 from atlas.agents.cli import CliAdapter, FakeAdapter, adapter_for
 
 __all__ = [
     "AgentAdapter",
+    "AgentBoundary",
     "AgentRequest",
     "AgentResult",
     "CliAdapter",
     "FailureKind",
     "FakeAdapter",
+    "SeatbeltBoundary",
     "adapter_for",
     "classify_failure",
+    "get_boundary",
     "redact",
     "scrubbed_env",
 ]

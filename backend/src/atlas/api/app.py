@@ -11,7 +11,7 @@ import re
 import subprocess
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Literal
 
@@ -83,6 +83,8 @@ from atlas.recovery.startup import (
     run_startup_recovery,
     sync_registry_to_db,
 )
+from atlas.sandbox import sandbox_status
+from atlas.sandbox.selftest import run_self_test
 from atlas.utils import ensure_secure_dir, new_ulid, utc_now_iso
 
 _REPO_SLUG_RE = re.compile(r"^[a-z0-9_.-]+/[a-z0-9_.-]+$")
@@ -622,6 +624,17 @@ def create_app(
             """,
             (new_ulid(), project_id, action, json.dumps(detail), new_ulid(), now),
         )
+
+    @app.get("/api/v1/sandbox")
+    def get_sandbox_status() -> dict[str, Any]:
+        """Read-only checks of the test sandbox. Nothing is started or changed."""
+        return sandbox_status().as_dict()
+
+    @app.post("/api/v1/sandbox/selftest")
+    def run_sandbox_selftest() -> dict[str, Any]:
+        """Create the canary container under the full contract and report what it saw."""
+        checks = run_self_test()
+        return {"ready": all(c.ok for c in checks), "checks": [asdict(c) for c in checks]}
 
     @app.get("/api/v1/settings")
     def get_settings() -> dict[str, Any]:

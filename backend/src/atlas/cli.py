@@ -76,7 +76,28 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Do not automatically open the dashboard in a browser",
     )
+    sandbox_parser = subparsers.add_parser("sandbox", help="Check or self-test the test sandbox")
+    sandbox_parser.add_argument(
+        "action",
+        choices=["command", "status", "selftest"],
+        help="command: print the VM start command; status: read-only checks; selftest: run the canary container",
+    )
     return parser
+
+
+def _sandbox(action: str) -> int:
+    from atlas.sandbox import sandbox_status, start_command
+    from atlas.sandbox.selftest import run_self_test
+
+    if action == "command":
+        print(start_command())
+        return 0
+    checks = sandbox_status().checks if action == "status" else run_self_test()
+    for check in checks:
+        print(f"[{'ok' if check.ok else 'FAIL'}] {check.label}" + (f": {check.detail}" if check.detail else ""))
+    ready = all(c.ok for c in checks)
+    print("Sandbox ready." if ready else "Sandbox NOT ready. No tests will run until every check passes.")
+    return 0 if ready else 1
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -88,6 +109,9 @@ def main(argv: list[str] | None = None) -> int:
 
     parser = build_parser()
     args = parser.parse_args(argv)
+
+    if args.command == "sandbox":
+        return _sandbox(args.action)
 
     if args.command != "serve":
         parser.print_help()

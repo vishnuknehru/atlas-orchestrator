@@ -1,5 +1,6 @@
-import { ArchivedProjects } from "./ProjectControls";
 import React, { useCallback, useEffect, useState } from "react";
+import { ArchivedProjects } from "./ProjectControls";
+import { SandboxPanel } from "./SandboxPanel";
 import {
   AgentConfigEntry,
   AgentRegistry,
@@ -759,6 +760,7 @@ export function Settings(): React.ReactElement {
             </section>
           )}
 
+          <SandboxPanel />
           <ArchivedProjects />
           <PolicyView config={settings.global_config} />
         </>

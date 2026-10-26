@@ -221,8 +221,8 @@ Tests run only inside Docker containers, in a dedicated Colima virtual machine (
      sudo diskutil apfs addVolume <container> APFS AtlasSandbox -reserve 80g -quota 80g
      ```
    - **Linux:** create a dedicated partition, or a fixed-size LVM logical volume (e.g. 80 GB), and mount it where ATLAS's Settings page says.
-2. **Start the ATLAS virtual machine.** Open **Dashboard → Settings → Test sandbox** and run the exact command shown there. It stores the VM's data on the volume from step 1 and shares **no** folders from your computer. ATLAS refuses to run tests if the VM can see any of your folders.
-3. **Run the self-test** from the same page.
+2. **Start the ATLAS virtual machine.** Run `atlas sandbox command` (or open **Dashboard → Settings → Test sandbox**) and run the command it prints. It is `colima start atlas` with `COLIMA_HOME` on the volume from step 1, `--mount none` (no folders shared from your computer) and `--activate=false` (your current Docker context stays as it is). ATLAS refuses to run tests if the VM can see any of your folders.
+3. **Run the self-test:** `atlas sandbox selftest`, or **Run self-test** on the same page. It creates one container under the full security contract, checks the container's effective settings *before* starting it, then runs a trusted canary that asserts: no network interface except loopback, no Docker socket, user 10001, read-only source and root filesystem, no host folders visible. `atlas sandbox status` shows the read-only checks without starting anything.
 
 ✅ **Done when** Settings → Test sandbox shows the sandbox as ready. If it isn't ready, projects show `BLOCKED(no_test_sandbox)` with the reason, and no tests run: ATLAS never runs tests or dependency setup outside the sandbox. (Developer agents are different: they edit code in worktrees on your computer, inside their own CLI sandboxes. See [Part 8](#part-8-what-atlas-will-never-do).)
 

@@ -110,6 +110,20 @@ export interface TaskCandidate {
   summary: string;
 }
 
+export interface SandboxCheck {
+  id: string;
+  label: string;
+  ok: boolean;
+  detail: string;
+}
+
+export interface SandboxStatus {
+  ready: boolean;
+  checks: SandboxCheck[];
+  start_command?: string;
+  volume_command?: string;
+}
+
 export interface RoadmapRecord {
   id: string;
   project_id: string;
@@ -289,6 +303,8 @@ export const atlasApi = {
       body: JSON.stringify({ goal }),
     }),
   getTaskHistory: (taskId: string) => apiRequest<TaskHistoryResponse>(`/api/v1/tasks/${taskId}/history`),
+  getSandbox: () => apiRequest<SandboxStatus>("/api/v1/sandbox"),
+  runSandboxSelfTest: () => apiRequest<SandboxStatus>("/api/v1/sandbox/selftest", { method: "POST" }),
   getTaskPlan: (taskId: string) => apiRequest<TaskPlan>(`/api/v1/tasks/${taskId}/plan`),
   getTaskCandidate: (taskId: string) => apiRequest<TaskCandidate>(`/api/v1/tasks/${taskId}/candidate`),
   approvePlan: (taskId: string) =>

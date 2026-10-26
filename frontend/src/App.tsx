@@ -66,6 +66,7 @@ export function App(): React.ReactElement {
   const [taskCategory, setTaskCategory] = useState("feature");
   const [taskPriority, setTaskPriority] = useState(3);
   const [taskCriterion, setTaskCriterion] = useState("");
+  const [roadmapGoal, setRoadmapGoal] = useState("");
 
   const loadData = useCallback(async () => {
     try {
@@ -166,6 +167,20 @@ export function App(): React.ReactElement {
     } finally { setPending(null); }
   };
 
+  const handleCreateRoadmap = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedProjectId || pending) return;
+    setPending("roadmap"); setError(null); setNotice("");
+    try {
+      const roadmap = await atlasApi.createRoadmap(selectedProjectId, roadmapGoal);
+      setRoadmapGoal("");
+      setNotice(`Plan ready: ${roadmap.tasks.length} phases were added as tasks. Start them in order when you’re ready.`);
+      await loadData();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to plan project");
+    } finally { setPending(null); }
+  };
+
   const handleTaskAction = async (
     taskId: string,
     action: "start" | "pause" | "resume" | "cancel" | "rebuild"
@@ -186,7 +201,9 @@ export function App(): React.ReactElement {
     (p) => p.id === selectedProjectId
   );
   const projectTasks: TaskRecord[] =
-    overview?.tasks.filter((t) => t.project_id === selectedProjectId) || [];
+    (overview?.tasks.filter((t) => t.project_id === selectedProjectId) || []).sort((a, b) =>
+      a.roadmap_id && a.roadmap_id === b.roadmap_id ? (a.roadmap_seq ?? 0) - (b.roadmap_seq ?? 0) : 0
+    );
 
   return (
     <div className="app-shell">
@@ -402,7 +419,7 @@ export function App(): React.ReactElement {
                     }`}
                   >
                     <div className="flex items-center justify-between">
-                      <span className="font-medium text-sm text-stone-900">{t.title}</span>
+                      <span className="font-medium text-sm text-stone-900">{t.roadmap_seq ? `Phase ${t.roadmap_seq}: ` : ""}{t.title}</span>
                       <span
                         className={`text-xs px-2 py-0.5 rounded border ${stateBadgeClass(
                           t.state
@@ -418,8 +435,31 @@ export function App(): React.ReactElement {
                 ))}
               </div>
 
+              <details className="composer" open={projectTasks.length === 0}><summary>Plan project in phases <span aria-hidden="true">+</span></summary><form
+                onSubmit={handleCreateRoadmap}
+                className="border-t border-stone-200 pt-4 space-y-3"
+              >
+                <p className="text-sm text-stone-500">Describe what you want to build. The architect agent writes a phased plan with acceptance criteria, and each phase is added below as a task.</p>
+                <label className="field-label">Project goal<textarea
+                  placeholder="Describe the project or outcome you want..."
+                  value={roadmapGoal}
+                  onChange={(e) => setRoadmapGoal(e.target.value)}
+                  required
+                  minLength={10}
+                  rows={4}
+                  className="w-full bg-stone-50 border border-stone-200 rounded px-3 py-1.5 text-sm text-stone-900"
+                /></label>
+                <button
+                  type="submit"
+                  disabled={pending === "roadmap"}
+                  className="w-full bg-teal-800 hover:bg-teal-900 text-stone-900 font-medium text-sm py-1.5 px-3 rounded"
+                >
+                  {pending === "roadmap" ? "Planning… this can take a minute" : "Create plan"}
+                </button>
+              </form></details>
+
               {currentProject && (
-                <details className="composer" open={projectTasks.length === 0}><summary>New task <span aria-hidden="true">+</span></summary><form
+                <details className="composer" open={false}><summary>New task <span aria-hidden="true">+</span></summary><form
                   onSubmit={handleCreateTask}
                   className="border-t border-stone-200 pt-4 space-y-3"
                 >

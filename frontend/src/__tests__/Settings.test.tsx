@@ -90,7 +90,7 @@ describe("Settings page", () => {
     render(<Settings />);
     await screen.findByText("Agents");
 
-    fireEvent.change(screen.getByPlaceholderText("e.g. local-reviewer"), { target: { value: "codex" } });
+    fireEvent.change(screen.getByPlaceholderText("claude"), { target: { value: "codex" } });
     fireEvent.click(screen.getByRole("button", { name: "Add agent" }));
     fireEvent.click(screen.getByRole("button", { name: "Save agents" }));
 

@@ -198,3 +198,36 @@ def test_project_removal_requires_csrf_and_handles_unknown_ids(tmp_path: Path) -
     assert client.delete(f"/api/v1/projects/{project_id}").status_code == 403
     assert client.delete("/api/v1/projects/missing", headers=headers).status_code == 404
     assert client.post("/api/v1/projects/missing/restore", headers=headers).status_code == 404
+
+
+def test_settings_offer_suggested_models_per_adapter(tmp_path: Path) -> None:
+    client, _ = _client(tmp_path, InMemorySecretStore())
+    adapters = {a["name"]: a for a in client.get("/api/v1/settings").json()["adapters"]}
+    assert "sonnet" in adapters["claude_cli"]["suggested_models"]
+    assert isinstance(adapters["codex_cli"]["suggested_models"], list)
+
+
+def test_failed_github_verification_reports_why(tmp_path: Path) -> None:
+    client, headers = _client(tmp_path, InMemorySecretStore())
+    project_id = _register(client, headers)
+    r = client.put(
+        f"/api/v1/projects/{project_id}/github-credential", headers=headers, json={"secret": "github_pat_wrong_token_value"}
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["verified"] is False
+    assert "error_detail" in r.json()
+
+
+def test_default_verifier_explains_http_errors(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    import subprocess
+
+    from atlas.api import app as app_mod
+
+    def fake_run(argv, **kw):  # type: ignore[no-untyped-def]
+        return subprocess.CompletedProcess(argv, 1, "", "gh: Not Found (HTTP 404)")
+
+    monkeypatch.setattr(app_mod.subprocess, "run", fake_run)
+    res = app_mod.default_gh_repo_verifier("octocat/typo", "secret-token")
+    assert not res.ok
+    assert "404" in (res.error_detail or "")
+    assert "secret-token" not in (res.error_detail or "")

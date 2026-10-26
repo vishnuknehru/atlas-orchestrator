@@ -16,6 +16,7 @@ FailureKind = Literal[
     "rate_limit",
     "nonzero_exit",
     "unsupported_adapter",
+    "no_agent_boundary",
 ]
 
 # Only these variables reach an agent process. Credentials such as GH_TOKEN or *_API_KEY are dropped.
@@ -38,6 +39,8 @@ class AgentRequest:
     prompt: str
     cwd: Path
     timeout_seconds: int = 300
+    # Writer roles: the agent may edit files, but only inside `cwd`, which must be its own worktree.
+    writable: bool = False
 
 
 @dataclass(frozen=True)

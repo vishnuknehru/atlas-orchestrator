@@ -201,7 +201,7 @@ export function App(): React.ReactElement {
     (p) => p.id === selectedProjectId
   );
   const projectTasks: TaskRecord[] =
-    (overview?.tasks.filter((t) => t.project_id === selectedProjectId) || []).sort((a, b) =>
+    (overview?.tasks.filter((t) => t.project_id === selectedProjectId && !(t.roadmap_id && t.state === "CANCELLED")) || []).sort((a, b) =>
       a.roadmap_id && a.roadmap_id === b.roadmap_id ? (a.roadmap_seq ?? 0) - (b.roadmap_seq ?? 0) : 0
     );
 

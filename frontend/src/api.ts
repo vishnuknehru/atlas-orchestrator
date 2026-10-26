@@ -71,8 +71,20 @@ export interface TaskRecord {
   created_at: string;
   updated_at: string;
   acceptance_criteria?: Array<{ id: string; text: string; mandatory: boolean }>;
+  roadmap_id?: string | null;
+  roadmap_seq?: number | null;
   phases?: PhaseRecord[];
   timeline?: TransitionRecord[];
+}
+
+export interface RoadmapRecord {
+  id: string;
+  project_id: string;
+  goal: string;
+  summary: string;
+  author_agent: string;
+  created_at: string;
+  tasks: TaskRecord[];
 }
 
 export interface TaskHistoryResponse {
@@ -237,6 +249,11 @@ export const atlasApi = {
     apiRequest<TaskRecord>(`/api/v1/projects/${projectId}/tasks`, {
       method: "POST",
       body: JSON.stringify(payload),
+    }),
+  createRoadmap: (projectId: string, goal: string) =>
+    apiRequest<RoadmapRecord>(`/api/v1/projects/${projectId}/roadmap`, {
+      method: "POST",
+      body: JSON.stringify({ goal }),
     }),
   getTaskHistory: (taskId: string) => apiRequest<TaskHistoryResponse>(`/api/v1/tasks/${taskId}/history`),
   getTask: (taskId: string) => apiRequest<TaskRecord>(`/api/v1/tasks/${taskId}`),

@@ -664,9 +664,39 @@ SCHEMA_Statements: tuple[str, ...] = (
 )
 
 
+# A roadmap is a project-level plan: the goal the user stated, the architect's summary, and
+# the ordered phases. Every phase is stored as an ordinary task that points back here.
+ROADMAP_TABLE_STATEMENT = """
+    CREATE TABLE IF NOT EXISTS roadmaps (
+      id TEXT PRIMARY KEY,
+      project_id TEXT NOT NULL REFERENCES projects(id),
+      goal TEXT NOT NULL,
+      summary TEXT NOT NULL,
+      author_agent TEXT NOT NULL,
+      created_at TEXT NOT NULL
+    );
+"""
+ROADMAP_TASK_COLUMNS: tuple[tuple[str, str], ...] = (
+    ("roadmap_id", "TEXT REFERENCES roadmaps(id)"),
+    ("roadmap_seq", "INTEGER"),
+)
+
+
+def apply_roadmap_schema(conn: sqlite3.Connection | Any) -> None:
+    """Idempotently add the roadmap table and task columns (also upgrades existing databases)."""
+    cursor = conn.cursor()
+    cursor.execute(ROADMAP_TABLE_STATEMENT)
+    existing = {str(row[1]) for row in cursor.execute("PRAGMA table_info(tasks);").fetchall()}
+    for column, ddl in ROADMAP_TASK_COLUMNS:
+        if column not in existing:
+            cursor.execute(f"ALTER TABLE tasks ADD COLUMN {column} {ddl};")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_tasks_roadmap ON tasks(roadmap_id, roadmap_seq);")
+
+
 def apply_schema_ddl(conn: sqlite3.Connection | Any) -> None:
     """Apply all canonical SQLite tables, indexes, and triggers."""
     cursor = conn.cursor()
     for statement in SCHEMA_Statements:
         cursor.execute(statement)
+    apply_roadmap_schema(conn)
     conn.commit()

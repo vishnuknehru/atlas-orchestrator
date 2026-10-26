@@ -12,6 +12,40 @@ Each person runs their own copy with their own accounts ([ADR-007](docs/adr/ADR-
 > Run `uv sync --extra dev` and `uv run atlas serve` to start the local ATLAS server and dashboard on `127.0.0.1:8420`.
 > Start with [`docs/how-to-use.md`](docs/how-to-use.md), [`docs/architecture.md`](docs/architecture.md), and [`docs/risks-and-decisions.md`](docs/risks-and-decisions.md).
 
+## Start and stop ATLAS
+
+**One-time setup** (from the repository root):
+
+```bash
+uv sync --extra dev                        # install the backend
+cd frontend && npm ci && npm run build && cd ..   # build the dashboard (served by the backend)
+```
+
+**Start**
+
+```bash
+uv run atlas serve                         # http://127.0.0.1:8420, opens your browser
+uv run atlas serve --no-browser            # do not open a browser
+uv run atlas serve --port 9000             # use another port (or set ATLAS_PORT)
+uv run atlas serve --data-dir ~/my-atlas   # use another data directory (or set ATLAS_HOME; default ~/.atlas)
+```
+
+The terminal prints a one-time bootstrap login URL. Open it if the browser does not open by itself.
+To run it in the background: `nohup uv run atlas serve --no-browser > atlas.log 2>&1 &`.
+
+**Stop**
+
+- Foreground: press `Ctrl+C` in the terminal running `atlas serve`.
+- Background: `pkill -f "atlas serve"` (sends a normal terminate signal).
+
+ATLAS allows one running instance per data directory. After a stop or crash, in-flight work is paused on the next start so you can resume it from the dashboard.
+
+**Develop the dashboard with hot reload:** run `uv run atlas serve --no-browser`, then `cd frontend && npm run dev`.
+
+## Plan a project in phases
+
+Open a project in the dashboard, expand **Plan project in phases**, describe the goal and select **Create plan**. The project's *architect* agent (set in Settings; Claude Code or Codex) writes an ordered plan, and every phase is added to the project as a task with its own acceptance criteria. Tasks are not started automatically: start them in order. Use **New task** for one-off work.
+
 ## Phase 0 documents
 
 | Document | Purpose |

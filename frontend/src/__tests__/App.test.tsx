@@ -121,6 +121,32 @@ describe("ATLAS Dashboard v1", () => {
     });
   });
 
+  it("plans a project goal and shows each phase as a task", async () => {
+    window.location.hash = "#/projects/proj-1";
+    const phaseTasks = [1, 2].map(seq => ({
+      ...mockOverview.tasks[0], id: `phase-${seq}`, title: `Step ${seq}`, state: "CREATED", roadmap_id: "rm-1", roadmap_seq: seq,
+    }));
+    let planned = false;
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+      const url = typeof input === "string" ? input : input.toString();
+      if (url.endsWith("/api/v1/projects/proj-1/roadmap")) {
+        expect(JSON.parse(String(init?.body))).toEqual({ goal: "Build a billing dashboard" });
+        planned = true;
+        return new Response(JSON.stringify({ id: "rm-1", project_id: "proj-1", goal: "g", summary: "s", author_agent: "claude", created_at: "", tasks: phaseTasks }), { status: 201 });
+      }
+      if (url.endsWith("/api/v1/overview")) {
+        return new Response(JSON.stringify({ ...mockOverview, tasks: planned ? [...phaseTasks].reverse() : [] }), { status: 200 });
+      }
+      return new Response(JSON.stringify({}), { status: 200 });
+    });
+    render(<App />);
+    fireEvent.change(await screen.findByLabelText("Project goal"), { target: { value: "Build a billing dashboard" } });
+    fireEvent.click(screen.getByRole("button", { name: "Create plan" }));
+    expect(await screen.findByText(/2 phases were added as tasks/)).toBeInTheDocument();
+    const titles = (await screen.findAllByText(/^Phase \d: Step/)).map(el => el.textContent);
+    expect(titles).toEqual(["Phase 1: Step 1", "Phase 2: Step 2"]);
+  });
+
   it("renders projects, recovery banner, and persisted transitions timeline", async () => {
     render(<App />);
 

@@ -59,6 +59,7 @@ from atlas.fsm.transitions import (
     apply_phase_transition,
     bump_project_policy_version,
 )
+from atlas.planning import PlanContext, PlanGenerationError, PlanGeneratorFn, cli_plan_generator
 from atlas.recovery.startup import (
     InstanceLock,
     RecoverySummary,
@@ -252,6 +253,12 @@ class StoreCredentialRequest(BaseModel):
     secret: str = Field(min_length=1, max_length=512)
 
 
+class CreateRoadmapRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    goal: str = Field(min_length=10, max_length=8000)
+
+
 class CreateTaskRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
@@ -320,6 +327,7 @@ def create_app(
     *,
     secret_store: SecretStore | None = None,
     gh_verifier: GitHubVerifierFn | None = None,
+    plan_generator: PlanGeneratorFn | None = None,
     allow_testserver: bool = False,
     acquire_lock: bool = True,
 ) -> FastAPI:
@@ -337,6 +345,7 @@ def create_app(
     redactor = Redactor()
     store = secret_store
     verifier = gh_verifier or default_gh_repo_verifier
+    planner = plan_generator or cli_plan_generator
     broadcaster = EventBroadcaster()
 
     session_token = load_or_create_session_token(resolved_dir)
@@ -1042,9 +1051,72 @@ def create_app(
             ).fetchall()
             return [dict(r) for r in rows]
 
+    def _insert_task(
+        conn: Any,
+        *,
+        project_id: str,
+        policy_version: int,
+        title: str,
+        request_text: str,
+        category: str,
+        priority: int,
+        criteria: list[dict[str, Any]],
+        now: str,
+        reason: str,
+        actor: str,
+        roadmap_id: str | None = None,
+        roadmap_seq: int | None = None,
+    ) -> dict[str, Any]:
+        task_id = new_ulid()
+        conn.execute(
+            """
+            INSERT INTO tasks (
+              id, project_id, title, request_text, category, priority,
+              autonomy, acceptance_criteria_json, state, resume_to,
+              blocked_reason, current_plan_id, generation, version,
+              created_at, updated_at, roadmap_id, roadmap_seq
+            ) VALUES (?, ?, ?, ?, ?, ?, 'supervised', ?, ?, NULL, NULL, NULL, 1, 0, ?, ?, ?, ?);
+            """,
+            (
+                task_id,
+                project_id,
+                title,
+                request_text,
+                category,
+                priority,
+                json.dumps(criteria),
+                TaskState.CREATED.value,
+                now,
+                now,
+                roadmap_id,
+                roadmap_seq,
+            ),
+        )
+        # Record initial creation transition in `transitions` so the timeline shows it from persisted transitions
+        conn.execute(
+            """
+            INSERT INTO transitions (
+              id, project_id, entity_type, entity_id, from_state, to_state,
+              reason, actor, candidate_id, policy_version, underlying,
+              evidence_refs_json, correlation_id, at
+            ) VALUES (?, ?, 'task', ?, NULL, ?, ?, ?, NULL, ?, 0, '[]', ?, ?);
+            """,
+            (
+                new_ulid(),
+                project_id,
+                task_id,
+                TaskState.CREATED.value,
+                reason,
+                actor,
+                policy_version,
+                new_ulid(),
+                now,
+            ),
+        )
+        return dict(conn.execute("SELECT * FROM tasks WHERE id = ?;", (task_id,)).fetchone())
+
     @app.post("/api/v1/projects/{project_id}/tasks", status_code=201)
     def create_task(project_id: str, req: CreateTaskRequest) -> dict[str, Any]:
-        task_id = new_ulid()
         now = utc_now_iso()
         criteria = [
             {
@@ -1064,60 +1136,125 @@ def create_app(
             ).fetchone()
             if not proj:
                 raise HTTPException(status_code=404, detail="Project not found")
-
-            conn.execute(
-                """
-                INSERT INTO tasks (
-                  id, project_id, title, request_text, category, priority,
-                  autonomy, acceptance_criteria_json, state, resume_to,
-                  blocked_reason, current_plan_id, generation, version,
-                  created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, 'supervised', ?, ?, NULL, NULL, NULL, 1, 0, ?, ?);
-                """,
-                (
-                    task_id,
-                    project_id,
-                    req.title.strip(),
-                    req.request_text.strip(),
-                    req.category,
-                    req.priority,
-                    json.dumps(criteria),
-                    TaskState.CREATED.value,
-                    now,
-                    now,
-                ),
+            task = _insert_task(
+                conn,
+                project_id=project_id,
+                policy_version=int(proj["policy_version"]),
+                title=req.title.strip(),
+                request_text=req.request_text.strip(),
+                category=req.category,
+                priority=req.priority,
+                criteria=criteria,
+                now=now,
+                reason="Task created by user",
+                actor="user",
             )
-            # Record initial creation transition in `transitions` so the timeline shows it from persisted transitions
-            conn.execute(
-                """
-                INSERT INTO transitions (
-                  id, project_id, entity_type, entity_id, from_state, to_state,
-                  reason, actor, candidate_id, policy_version, underlying,
-                  evidence_refs_json, correlation_id, at
-                ) VALUES (?, ?, 'task', ?, NULL, ?, 'Task created by user', 'user', NULL, ?, 0, '[]', ?, ?);
-                """,
-                (
-                    new_ulid(),
-                    project_id,
-                    task_id,
-                    TaskState.CREATED.value,
-                    int(proj["policy_version"]),
-                    new_ulid(),
-                    now,
-                ),
-            )
-            row = conn.execute("SELECT * FROM tasks WHERE id = ?;", (task_id,)).fetchone()
 
         broadcaster.publish(
             {
                 "type": "task_created",
                 "project_id": project_id,
-                "task_id": task_id,
+                "task_id": task["id"],
                 "state": TaskState.CREATED.value,
                 "at": now,
             }
         )
-        return dict(row)
+        return task
+
+    @app.post("/api/v1/projects/{project_id}/roadmap", status_code=201)
+    def create_roadmap(project_id: str, req: CreateRoadmapRequest) -> dict[str, Any]:
+        """Have the project's architect plan the goal in phases; each phase becomes a task."""
+        registry = load_agent_registry(resolved_dir)
+        with db.read_conn() as conn:
+            proj = conn.execute(
+                "SELECT * FROM projects WHERE id = ? AND status != 'archived';", (project_id,)
+            ).fetchone()
+        if not proj:
+            raise HTTPException(status_code=404, detail="Project not found")
+        roles = ProjectRoleMapping.model_validate(json.loads(proj["config_json"]).get("agents", {}))
+        agent = registry.agents.get(roles.architect)
+        if agent is None:
+            raise HTTPException(
+                status_code=422,
+                detail=f"The architect agent {roles.architect!r} is not in the agent registry. Choose one in Settings.",
+            )
+
+        try:
+            plan = planner(
+                PlanContext(
+                    project_name=str(proj["name"]),
+                    repository=str(proj["github_repo"]),
+                    base_branch=str(proj["base_branch"]),
+                    goal=req.goal,
+                    agent_id=roles.architect,
+                    agent=agent,
+                )
+            )
+        except PlanGenerationError as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+        roadmap_id = new_ulid()
+        now = utc_now_iso()
+        with db.begin_immediate() as conn:
+            current = conn.execute(
+                "SELECT policy_version FROM projects WHERE id = ? AND status != 'archived';", (project_id,)
+            ).fetchone()
+            if not current:
+                raise HTTPException(status_code=404, detail="Project not found")
+            conn.execute(
+                "INSERT INTO roadmaps (id, project_id, goal, summary, author_agent, created_at) VALUES (?, ?, ?, ?, ?, ?);",
+                (roadmap_id, project_id, req.goal, plan.summary, roles.architect, now),
+            )
+            tasks = [
+                _insert_task(
+                    conn,
+                    project_id=project_id,
+                    policy_version=int(current["policy_version"]),
+                    title=phase.title,
+                    request_text=phase.objective,
+                    category=phase.category,
+                    priority=3,
+                    criteria=[
+                        {"id": f"AC-{n + 1}", "text": text, "mandatory": True}
+                        for n, text in enumerate(phase.acceptance_criteria)
+                    ],
+                    now=now,
+                    reason=f"Phase {seq} of roadmap planned by {roles.architect}",
+                    actor=roles.architect,
+                    roadmap_id=roadmap_id,
+                    roadmap_seq=seq,
+                )
+                for seq, phase in enumerate(plan.phases, start=1)
+            ]
+            _audit(conn, project_id, "roadmap_created", {"roadmap_id": roadmap_id, "phases": len(tasks)}, now)
+
+        for task in tasks:
+            broadcaster.publish(
+                {
+                    "type": "task_created",
+                    "project_id": project_id,
+                    "task_id": task["id"],
+                    "state": TaskState.CREATED.value,
+                    "at": now,
+                }
+            )
+        return {
+            "id": roadmap_id,
+            "project_id": project_id,
+            "goal": req.goal,
+            "summary": plan.summary,
+            "author_agent": roles.architect,
+            "created_at": now,
+            "tasks": tasks,
+        }
+
+    @app.get("/api/v1/projects/{project_id}/roadmaps")
+    def list_roadmaps(project_id: str) -> list[dict[str, Any]]:
+        with db.read_conn() as conn:
+            rows = conn.execute(
+                "SELECT * FROM roadmaps WHERE project_id = ? ORDER BY created_at DESC, id DESC;", (project_id,)
+            ).fetchall()
+            return [dict(r) for r in rows]
 
     def _read_task_detail(conn: Any, task_id: str) -> dict[str, Any]:
         task = conn.execute(

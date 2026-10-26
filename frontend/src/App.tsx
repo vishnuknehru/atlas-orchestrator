@@ -446,9 +446,11 @@ export function App(): React.ReactElement {
                   onChange={(e) => setRoadmapGoal(e.target.value)}
                   required
                   minLength={10}
+                  maxLength={32000}
                   rows={4}
                   className="w-full bg-stone-50 border border-stone-200 rounded px-3 py-1.5 text-sm text-stone-900"
                 /></label>
+                <p className="text-xs text-stone-500">{roadmapGoal.length.toLocaleString()} / 32,000 characters</p>
                 <button
                   type="submit"
                   disabled={pending === "roadmap"}

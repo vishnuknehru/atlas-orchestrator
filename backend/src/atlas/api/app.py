@@ -253,10 +253,13 @@ class StoreCredentialRequest(BaseModel):
     secret: str = Field(min_length=1, max_length=512)
 
 
+ROADMAP_GOAL_MAX_CHARS = 32000
+
+
 class CreateRoadmapRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
-    goal: str = Field(min_length=10, max_length=8000)
+    goal: str = Field(min_length=10, max_length=ROADMAP_GOAL_MAX_CHARS)
 
 
 class CreateTaskRequest(BaseModel):

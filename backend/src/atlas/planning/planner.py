@@ -8,7 +8,6 @@ before anything is written to the database.
 from __future__ import annotations
 
 import json
-import subprocess
 import tempfile
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -17,6 +16,7 @@ from typing import Literal, get_args
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
+from atlas.agents import AgentRequest, AgentResult, adapter_for
 from atlas.config.schemas import AgentConfigEntry
 
 Category = Literal[
@@ -119,49 +119,35 @@ def parse_plan_output(text: str) -> ProjectPlan:
     raise PlanGenerationError("The architect did not return a plan in the expected format.")
 
 
-def _command(ctx: PlanContext, scratch: Path, out_file: Path) -> list[str]:
-    model = ctx.agent.models[0] if ctx.agent.models else None
-    if ctx.agent.adapter == "claude_cli":
-        cmd = ["claude", "-p", "--output-format", "text", "--no-session-persistence"]
-        if model:
-            cmd += ["--model", model]
-        return cmd
-    if ctx.agent.adapter == "codex_cli":
-        # Model is deliberately not passed: the CLI default is the one that works on the user's login.
-        return [
-            "codex", "exec", "-s", "read-only", "--skip-git-repo-check", "--ephemeral",
-            "--ignore-rules", "-C", str(scratch), "-o", str(out_file), "-",
-        ]
-    raise PlanGenerationError(
-        f"Agent {ctx.agent_id!r} ({ctx.agent.adapter}) cannot generate plans automatically. "
-        "Choose a Claude Code or Codex agent as this project's architect in Settings."
-    )
-
-
 def cli_plan_generator(ctx: PlanContext) -> ProjectPlan:
-    """Run the project's architect agent CLI once and parse its plan."""
+    """Run the project's architect agent once, read-only in an empty scratch directory, and parse its plan."""
     with tempfile.TemporaryDirectory(prefix="atlas-plan-") as tmp:
-        scratch = Path(tmp)
-        out_file = scratch / "plan.txt"
-        cmd = _command(ctx, scratch, out_file)
-        try:
-            proc = subprocess.run(
-                cmd,
-                input=build_prompt(ctx),
-                capture_output=True,
-                text=True,
-                cwd=scratch,
-                timeout=PLAN_TIMEOUT_SECONDS,
-                check=False,
+        result = adapter_for(ctx.agent).run(
+            AgentRequest(
+                agent_id=ctx.agent_id,
+                role="architect",
+                prompt=build_prompt(ctx),
+                cwd=Path(tmp),
+                timeout_seconds=PLAN_TIMEOUT_SECONDS,
             )
-        except FileNotFoundError as exc:
-            raise PlanGenerationError(f"The {cmd[0]!r} command is not installed or not on PATH.") from exc
-        except subprocess.TimeoutExpired as exc:
-            raise PlanGenerationError("The architect took too long to produce a plan. Try a narrower goal.") from exc
-        if proc.returncode != 0:
-            detail = (proc.stderr or proc.stdout or "").strip().splitlines()
-            raise PlanGenerationError(
-                f"The architect agent failed (exit {proc.returncode}): {detail[-1][:300] if detail else 'no output'}"
-            )
-        output = out_file.read_text() if out_file.exists() else proc.stdout
-        return parse_plan_output(output)
+        )
+    if not result.ok:
+        raise PlanGenerationError(_failure_message(ctx, result))
+    return parse_plan_output(result.output)
+
+
+def _failure_message(ctx: PlanContext, result: AgentResult) -> str:
+    if result.failure == "unsupported_adapter":
+        return (
+            f"Agent {ctx.agent_id!r} ({ctx.agent.adapter}) cannot generate plans automatically. "
+            "Choose a Claude Code or Codex agent as this project's architect in Settings."
+        )
+    if result.failure == "timeout":
+        return "The architect took too long to produce a plan. Try a narrower goal."
+    if result.failure == "rate_limit":
+        return f"The architect agent hit a usage limit: {result.detail}. Try again later."
+    if result.failure == "auth_expired":
+        return f"The architect agent is not signed in: {result.detail}. Sign in to its CLI and retry."
+    if result.failure == "not_installed":
+        return result.detail
+    return f"The architect agent failed (exit {result.exit_code}): {result.detail}"

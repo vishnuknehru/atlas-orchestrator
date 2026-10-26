@@ -115,3 +115,13 @@ def test_existing_database_is_upgraded(tmp_path: Path) -> None:
     apply_schema_ddl(conn)  # idempotent
     cols = {row[1] for row in conn.execute("PRAGMA table_info(tasks);")}
     assert {"roadmap_id", "roadmap_seq"} <= cols
+
+
+def test_refined_plan_cancels_unstarted_phases_of_the_previous_plan(tmp_path: Path) -> None:
+    client, headers, pid = _client(tmp_path, lambda ctx: _plan())
+    first = client.post(f"/api/v1/projects/{pid}/roadmap", headers=headers, json={"goal": "Add user authentication"}).json()
+    second = client.post(f"/api/v1/projects/{pid}/roadmap", headers=headers, json={"goal": "Add user authentication v2"}).json()
+
+    states = {t["id"]: t["state"] for t in client.get(f"/api/v1/projects/{pid}/tasks").json()}
+    assert all(states[t["id"]] == "CANCELLED" for t in first["tasks"])
+    assert all(states[t["id"]] == "CREATED" for t in second["tasks"])

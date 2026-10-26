@@ -57,6 +57,7 @@ from atlas.fsm.transitions import (
     GuardFailedError,
     InvalidTransitionError,
     apply_phase_transition,
+    apply_task_transition,
     bump_project_policy_version,
 )
 from atlas.planning import PlanContext, PlanGenerationError, PlanGeneratorFn, cli_plan_generator
@@ -1204,6 +1205,19 @@ def create_app(
             ).fetchone()
             if not current:
                 raise HTTPException(status_code=404, detail="Project not found")
+            # A refined plan replaces the earlier one: phases that were never started are retired.
+            stale = conn.execute(
+                "SELECT id FROM tasks WHERE project_id = ? AND roadmap_id IS NOT NULL AND state = ?;",
+                (project_id, TaskState.CREATED.value),
+            ).fetchall()
+            for row in stale:
+                apply_task_transition(
+                    conn,
+                    task_id=str(row["id"]),
+                    to_state=TaskState.CANCELLED.value,
+                    reason=f"Superseded by a refined plan ({roadmap_id})",
+                    actor="user",
+                )
             conn.execute(
                 "INSERT INTO roadmaps (id, project_id, goal, summary, author_agent, created_at) VALUES (?, ?, ?, ?, ?, ?);",
                 (roadmap_id, project_id, req.goal, plan.summary, roles.architect, now),

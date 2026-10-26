@@ -21,6 +21,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, Field
 
 from atlas import __version__
+from atlas.analysis import make_analyse_handler
 from atlas.api.security import (
     CSRF_COOKIE_NAME,
     SESSION_COOKIE_NAME,
@@ -344,7 +345,24 @@ def create_app(
     load_global_config(resolved_dir)
     load_agent_registry(resolved_dir)
 
-    engine = LangGraphWorkflowEngine(db)
+    class _LazyStore:
+        """Resolves the OS secret store on first use so app start-up never touches the keychain."""
+
+        def _active(self) -> SecretStore:
+            return store if store is not None else get_default_secret_store()
+
+        def get_secret(self, service: str, account: str | None = None) -> str | None:
+            return self._active().get_secret(service, account)
+
+        def set_secret(self, service: str, account: str, secret: str) -> None:
+            self._active().set_secret(service, account, secret)
+
+        def delete_secret(self, service: str, account: str | None = None) -> None:
+            self._active().delete_secret(service, account)
+
+    engine = LangGraphWorkflowEngine(
+        db, step_handlers={"analyse": make_analyse_handler(_LazyStore(), db.projects_dir)}
+    )
     instance_lock = InstanceLock(resolved_dir)
     redactor = Redactor()
     store = secret_store

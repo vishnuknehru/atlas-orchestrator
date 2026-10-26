@@ -8,6 +8,7 @@ import {
 } from "./api";
 import { ProjectControls } from "./ProjectControls";
 import { Settings } from "./Settings";
+import { CandidatePanel } from "./CandidatePanel";
 import { PlanPanel } from "./PlanPanel";
 import { TaskHistory } from "./TaskHistory";
 import { readTheme, applyTheme, Theme } from "./theme";
@@ -198,7 +199,7 @@ export function App(): React.ReactElement {
     } finally { setPending(null); }
   };
 
-  const running = (overview?.tasks ?? []).some((t) => ["REPOSITORY_ANALYSIS", "PLANNING", "PLAN_CHALLENGE", "PLAN_REVISION"].includes(t.state));
+  const running = (overview?.tasks ?? []).some((t) => ["REPOSITORY_ANALYSIS", "PLANNING", "PLAN_CHALLENGE", "PLAN_REVISION", "READY_FOR_IMPLEMENTATION"].includes(t.state));
   const selectedTaskId = selectedTask?.id;
   useEffect(() => {
     if (!running) return;
@@ -667,6 +668,7 @@ export function App(): React.ReactElement {
                     version={selectedTask.version}
                     onChanged={() => { void loadData(); void loadTaskDetail(selectedTask.id); }}
                   />
+                  <CandidatePanel taskId={selectedTask.id} state={selectedTask.state} version={selectedTask.version} />
                   <TaskHistory key={selectedTask.id} taskId={selectedTask.id} version={selectedTask.version} />
                 </div>
               )}

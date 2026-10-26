@@ -96,7 +96,9 @@ _TASK_BASE_EDGES: dict[TaskState, frozenset[TaskState]] = {
             TaskState.CREATED,
             TaskState.REPOSITORY_ANALYSIS,
             TaskState.PLANNING,
+            TaskState.PLAN_CHALLENGE,
             TaskState.PLAN_REVISION,
+            TaskState.READY_FOR_IMPLEMENTATION,
             TaskState.EXECUTING_PHASES,
         }
     ),

@@ -68,6 +68,7 @@ from atlas.fsm.transitions import (
     apply_task_transition,
     bump_project_policy_version,
 )
+from atlas.implementation import load_candidate, make_implement_handler
 from atlas.planning import PlanContext, PlanGenerationError, PlanGeneratorFn, cli_plan_generator
 from atlas.planning.challenge import (
     append_user_feedback,
@@ -393,6 +394,9 @@ def create_app(
                 db.projects_dir, _lookup_agent, agent_adapter_factory or adapter_for
             ),
             "revise": make_revise_handler(db.projects_dir, _lookup_agent, agent_adapter_factory or adapter_for),
+            "implement": make_implement_handler(
+                db.projects_dir, _lookup_agent, agent_adapter_factory or adapter_for
+            ),
         },
     )
     instance_lock = InstanceLock(resolved_dir)
@@ -1493,8 +1497,16 @@ def create_app(
         except CapabilityUnavailableError as exc:
             raise HTTPException(status_code=404, detail="No plan has been drafted for this task yet") from exc
 
+    @app.get("/api/v1/tasks/{task_id}/candidate")
+    def get_task_candidate(task_id: str) -> dict[str, Any]:
+        project_id, _ = _task_project(task_id)
+        candidate = load_candidate(db.projects_dir, project_id, task_id)
+        if candidate is None:
+            raise HTTPException(status_code=404, detail="No candidate has been produced for this task yet")
+        return candidate
+
     @app.post("/api/v1/tasks/{task_id}/plan/approve")
-    def approve_task_plan(task_id: str) -> dict[str, Any]:
+    def approve_task_plan(task_id: str, background: BackgroundTasks) -> dict[str, Any]:
         _task_project(task_id)
         try:
             with db.begin_immediate() as conn:
@@ -1510,6 +1522,7 @@ def create_app(
                 )
         except (InvalidTransitionError, GuardFailedError) as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
+        background.add_task(_run_in_background, task_id)
         row = _task_row(task_id)
         broadcaster.publish(
             {"type": "task_transition", "task_id": task_id, "state": row["state"], "at": utc_now_iso()}

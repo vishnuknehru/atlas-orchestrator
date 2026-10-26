@@ -14,6 +14,7 @@ from typing import Any
 from atlas.config.secret_store import SecretStore, SecretStoreUnavailableError
 from atlas.engine.workflow import CapabilityUnavailableError, StepHandlerFn, StepHandlerResult
 from atlas.fsm.states import TaskState
+from atlas.worktrees import WorktreeError, head_sha
 
 GIT_TIMEOUT_SECONDS = 300
 README_CHARS = 4000
@@ -133,8 +134,11 @@ def make_analyse_handler(store: SecretStore, projects_dir: Path) -> StepHandlerF
         try:
             ensure_checkout(clone_path, f"https://github.com/{repo}.git", str(proj["base_branch"]), pat)
             analysis = scan_repository(clone_path)
+            analysis["head_sha"] = head_sha(clone_path)
         except CheckoutError as exc:
             raise CapabilityUnavailableError(exc.code) from exc
+        except WorktreeError as exc:
+            raise CapabilityUnavailableError("clone_failed") from exc
         out = projects_dir / project_id / "analysis" / f"{entity_id}.json"
         out.parent.mkdir(parents=True, exist_ok=True)
         out.write_text(json.dumps(analysis, indent=2, sort_keys=True), encoding="utf-8")

@@ -28,6 +28,7 @@ _FAILURE_CODES = {
     "not_installed": "agent_not_installed",
     "timeout": "agent_timeout",
     "unsupported_adapter": "agent_cannot_run_automatically",
+    "no_agent_boundary": "no_agent_boundary",
 }
 
 
@@ -106,13 +107,27 @@ def parse_task_plan(text: str, criterion_ids: set[str]) -> TaskPlan:
 
 
 def run_agent(
-    adapter_factory: AdapterFactory, agent: AgentConfigEntry, agent_id: str, role: str, prompt: str
+    adapter_factory: AdapterFactory,
+    agent: AgentConfigEntry,
+    agent_id: str,
+    role: str,
+    prompt: str,
+    *,
+    cwd: Path | None = None,
+    writable: bool = False,
+    timeout_seconds: int = PLAN_TIMEOUT_SECONDS,
 ) -> str:
-    """Run one read-only agent call in a scratch directory; failures become blocked reasons."""
+    """Run one agent call; read-only in a scratch directory unless a worktree `cwd` and `writable` are given.
+    Failures become blocked reasons."""
     with tempfile.TemporaryDirectory(prefix=f"atlas-{role}-") as tmp:
         result: AgentResult = adapter_factory(agent).run(
             AgentRequest(
-                agent_id=agent_id, role=role, prompt=prompt, cwd=Path(tmp), timeout_seconds=PLAN_TIMEOUT_SECONDS
+                agent_id=agent_id,
+                role=role,
+                prompt=prompt,
+                cwd=cwd if cwd is not None else Path(tmp),
+                timeout_seconds=timeout_seconds,
+                writable=writable,
             )
         )
     if not result.ok:

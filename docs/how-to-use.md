@@ -273,8 +273,8 @@ project:
 agents:                      # agent ids from Step 6; the reviewer must differ from the author (ADR-005)
   architect: claude
   challenger: codex
-  developer: codex
-  reviewer: claude
+  developer: claude
+  reviewer: codex
   qa: antigravity            # manual_handoff: you run Antigravity yourself (ADR-003)
 tests:                       # [P4]
   writable_paths: [".venv", ".pytest_cache"]   # must not overlap tracked files (security-model.md §5.1.3)
@@ -309,7 +309,7 @@ Open **Dashboard → your project → New task** and fill in:
 4. **Acceptance criteria:** how you'll know it's done. Each one gets an ID, and QA must answer every one.
 5. Click **Start**.
 
-**What runs today:** Start clones your repository (using the project's GitHub token from Settings), scans it, and asks the project's architect agent for an implementation plan. A different agent (the challenger, Codex by default) then attacks the plan. Blocking findings go back to the architect, who must answer each one and revise the plan. This repeats for up to 3 rounds, then the task waits for you at **Awaiting approval**. Read the plan and the challenge history on the task page, then click **Approve plan** or write what should change and click **Request changes** (the loop runs again). Approving moves the task to **Ready for implementation**; the implementation, test, review and delivery steps are not built yet, so it stops there. If a step cannot run (no token, agent not signed in, usage limit, invalid plan, challenger not independent of the architect), the task shows **Needs attention** with the reason. Fix the cause, then click **Retry**.
+**What runs today:** Start clones your repository (using the project's GitHub token from Settings), scans it, and asks the project's architect agent for an implementation plan. A different agent (the challenger, Codex by default) then attacks the plan. Blocking findings go back to the architect, who must answer each one and revise the plan. This repeats for up to 3 rounds, then the task waits for you at **Awaiting approval**. Read the plan and the challenge history on the task page, then click **Approve plan** or write what should change and click **Request changes** (the loop runs again). Approving starts the implementation: the developer agent (Claude Code by default; Codex cannot edit files under ATLAS's sandbox yet) edits a private copy of the repository (a git worktree under `~/.atlas/projects/<id>/worktrees/`), and ATLAS commits the result as a **candidate**. The task page lists the changed files, flags any that touch CI configuration, credentials or tool settings, and shows the agent's summary. The task then stops at **Executing phases**: tests, independent review, QA and GitHub delivery are not built yet, so nothing is pushed or merged. If a step cannot run (no token, agent not signed in, usage limit, invalid plan, challenger not independent of the architect), the task shows **Needs attention** with the reason. Fix the cause, then click **Retry**.
 
 ### Step 12. Review and approve the plan
 **Available:** [P3]

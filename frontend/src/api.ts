@@ -98,6 +98,18 @@ export interface TaskPlan {
   history: PlanHistoryEntry[];
 }
 
+export interface TaskCandidate {
+  author_agent: string;
+  plan_revision: number;
+  base_sha: string;
+  commit_sha: string;
+  worktree: string;
+  changed_files: string[];
+  guard_status: "clear" | "held";
+  violations: Array<{ path: string; kind: string }>;
+  summary: string;
+}
+
 export interface RoadmapRecord {
   id: string;
   project_id: string;
@@ -278,6 +290,7 @@ export const atlasApi = {
     }),
   getTaskHistory: (taskId: string) => apiRequest<TaskHistoryResponse>(`/api/v1/tasks/${taskId}/history`),
   getTaskPlan: (taskId: string) => apiRequest<TaskPlan>(`/api/v1/tasks/${taskId}/plan`),
+  getTaskCandidate: (taskId: string) => apiRequest<TaskCandidate>(`/api/v1/tasks/${taskId}/candidate`),
   approvePlan: (taskId: string) =>
     apiRequest<TaskRecord>(`/api/v1/tasks/${taskId}/plan/approve`, { method: "POST" }),
   requestPlanChanges: (taskId: string, comment: string) =>

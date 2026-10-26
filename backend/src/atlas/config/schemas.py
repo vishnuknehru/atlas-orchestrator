@@ -229,8 +229,8 @@ class GlobalRoleDefaults(BaseModel):
 
     architect: str = "claude"
     challenger: str = "codex"
-    developer: str = "codex"
-    reviewer: str = "claude"
+    developer: str = "claude"
+    reviewer: str = "codex"
     qa: str = "antigravity"
 
 
@@ -389,8 +389,8 @@ class ProjectRoleMapping(BaseModel):
 
     architect: str = "claude"
     challenger: str = "codex"
-    developer: str = "codex"
-    reviewer: str = "claude"
+    developer: str = "claude"
+    reviewer: str = "codex"
     qa: str = "antigravity"
 
 

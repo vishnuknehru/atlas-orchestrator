@@ -101,6 +101,7 @@ TASK_STATE_NODES: dict[str, str] = {
     TaskState.PLANNING.value: "plan",
     TaskState.PLAN_CHALLENGE.value: "challenge",
     TaskState.PLAN_REVISION.value: "revise",
+    TaskState.READY_FOR_IMPLEMENTATION.value: "implement",
 }
 
 

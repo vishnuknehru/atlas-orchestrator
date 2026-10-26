@@ -22,10 +22,10 @@ const ADAPTER_LABELS: Record<string, string> = {
   openai_compatible_http: "Local model server (OpenAI-compatible HTTP)",
 };
 
-function emptyAgent(adapter: string): AgentConfigEntry {
+function emptyAgent(adapter: string, models: string[] = []): AgentConfigEntry {
   return {
     adapter,
-    models: [],
+    models,
     billing: adapter === "manual_handoff" ? "manual" : "subscription",
     provider: null,
     model_family: null,
@@ -137,7 +137,7 @@ function GithubCredentialCard({
       setMessage(
         res.verified
           ? "Stored and verified with GitHub."
-          : `Stored, but GitHub verification failed (${res.error_reason}). Check the token's repository access and permissions.`
+          : `Stored, but GitHub verification failed. ${res.error_detail ?? "Check the token's repository access and permissions."}`
       );
       await onChanged();
     } catch (err) {
@@ -196,6 +196,65 @@ function GithubCredentialCard({
         )}
       </div>
       {message && <p className="text-xs text-stone-600">{message}</p>}
+    </div>
+  );
+}
+
+const CUSTOM_MODEL = "__custom__";
+
+function ModelPicker({
+  models,
+  suggestions,
+  onChange,
+}: {
+  models: string[];
+  suggestions: string[];
+  onChange: (models: string[]) => void;
+}): React.ReactElement {
+  const primary = models[0]?.trim() ?? "";
+  const [custom, setCustom] = useState(primary !== "" && !suggestions.includes(primary));
+  const showCustom = custom || suggestions.length === 0;
+
+  return (
+    <div>
+      {suggestions.length > 0 && (
+        <label>
+          <span className={labelClass}>Model (first is primary)</span>
+          <select
+            value={showCustom ? CUSTOM_MODEL : primary}
+            onChange={(e) => {
+              if (e.target.value === CUSTOM_MODEL) {
+                setCustom(true);
+                return;
+              }
+              setCustom(false);
+              onChange([e.target.value, ...models.slice(1)]);
+            }}
+            className={`${inputClass} font-mono`}
+          >
+            {primary === "" && !showCustom && <option value="">Select a model…</option>}
+            {suggestions.map((m) => (
+              <option key={m} value={m}>
+                {m}
+              </option>
+            ))}
+            <option value={CUSTOM_MODEL}>Other (type a model id)…</option>
+          </select>
+        </label>
+      )}
+      {showCustom && (
+        <label>
+          <span className={labelClass}>
+            {suggestions.length > 0 ? "Custom model ids" : "Models"} (comma-separated, first is primary)
+          </span>
+          <input
+            type="text"
+            value={models.join(",")}
+            onChange={(e) => onChange(e.target.value.split(","))}
+            className={`${inputClass} font-mono`}
+          />
+        </label>
+      )}
     </div>
   );
 }
@@ -260,15 +319,11 @@ function AgentFields({
         </label>
       )}
       {!isManual && (
-        <label>
-          <span className={labelClass}>Models (comma-separated, first is primary)</span>
-          <input
-            type="text"
-            value={entry.models.join(",")}
-            onChange={(e) => set({ models: e.target.value.split(",") })}
-            className={`${inputClass} font-mono`}
-          />
-        </label>
+        <ModelPicker
+          models={entry.models}
+          suggestions={adapters.find((a) => a.name === entry.adapter)?.suggested_models ?? []}
+          onChange={(models) => set({ models })}
+        />
       )}
       <label>
         <span className={labelClass}>Provider {isManual ? "(required)" : "(optional)"}</span>
@@ -350,15 +405,20 @@ function AgentRegistryEditor({
     setSaved(false);
     setDraft({ agents: rest });
   };
+  const [newAdapter, setNewAdapter] = useState(defaultAdapter);
+  const suggestedId = (adapter: string) =>
+    ({ claude_cli: "claude", codex_cli: "codex", manual_handoff: "antigravity", openai_compatible_http: "local-model" })[
+      adapter
+    ] ?? adapter;
   const add = (e: React.FormEvent) => {
     e.preventDefault();
-    const id = newId.trim();
-    if (!id) return;
+    const id = (newId.trim() || suggestedId(newAdapter)).trim();
     if (draft.agents[id]) {
       onError(`Agent ${id} already exists`);
       return;
     }
-    update(id, emptyAgent(defaultAdapter));
+    const first = settings.adapters.find((a) => a.name === newAdapter)?.suggested_models?.[0];
+    update(id, emptyAgent(newAdapter, newAdapter === "manual_handoff" || !first ? [] : [first]));
     setNewId("");
   };
   const save = async () => {
@@ -479,12 +539,21 @@ function AgentRegistryEditor({
 
       <form onSubmit={add} className="flex gap-2 items-end border-t border-stone-200 pt-4">
         <label className="flex-1">
-          <span className={labelClass}>New agent id</span>
+          <span className={labelClass}>Agent</span>
+          <select value={newAdapter} onChange={(e) => setNewAdapter(e.target.value)} className={inputClass}>
+            {settings.adapters.map((a) => (
+              <option key={a.name} value={a.name}>
+                {ADAPTER_LABELS[a.name] ?? a.name}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="flex-1">
+          <span className={labelClass}>Name</span>
           <input
             type="text"
-            required
             disabled={saving}
-            placeholder="e.g. local-reviewer"
+            placeholder={suggestedId(newAdapter)}
             value={newId}
             onChange={(e) => setNewId(e.target.value)}
             className={`${inputClass} font-mono`}

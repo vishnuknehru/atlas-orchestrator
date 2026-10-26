@@ -145,6 +145,7 @@ export interface SettingsResponse {
     kind: string;
     default_provider: string | null;
     allowed_roles: string[];
+    suggested_models?: string[];
   }>;
   registry: AgentRegistry;
   agent_api_keys: Record<string, boolean | null>;
@@ -156,6 +157,7 @@ export interface CredentialResult {
   project: ProjectRecord;
   verified: boolean;
   error_reason: string | null;
+  error_detail?: string | null;
   role_evaluation: RoleEvaluation;
 }
 

@@ -28,6 +28,7 @@ from atlas.api.security import (
     derive_csrf_token,
     load_or_create_session_token,
 )
+from atlas.config.model_catalog import suggested_models
 from atlas.config.schemas import (
     ADAPTER_MANIFESTS,
     AgentRegistryConfig,
@@ -133,8 +134,27 @@ class GitHubRepoCheckResult:
 GitHubVerifierFn = Callable[[str, str], GitHubRepoCheckResult]
 
 
+def _gh_failure(proc: subprocess.CompletedProcess[str], repo: str, pat: str) -> str:
+    """Turn a failed `gh api` call into a message that says what to fix (never includes the token)."""
+    text = (proc.stderr or proc.stdout or "").replace(pat, "***").lower()
+    if "401" in text or "bad credentials" in text:
+        return "GitHub rejected the token (401): it is wrong, expired or revoked. Create a new token and paste it again."
+    if "404" in text or "not found" in text:
+        return (
+            f"GitHub returned 404 for {repo}: the repository name is wrong, or the token has no access to it. "
+            "Check the owner/name and that the token's repository access includes it."
+        )
+    if "403" in text:
+        return (
+            "GitHub refused access (403): the token lacks permission (needs Metadata: read) "
+            "or the organization requires SSO/approval for it."
+        )
+    detail = " ".join((proc.stderr or proc.stdout or "").replace(pat, "***").split())[:200]
+    return f"gh api failed: {detail or 'no output'}"
+
+
 def default_gh_repo_verifier(repo: str, pat: str) -> GitHubRepoCheckResult:
-    """Verify repository access, visibility, and default branch via `gh repo view` using only the project PAT."""
+    """Verify repository access, visibility, and default branch via `gh api` using only the project PAT."""
     scrubbed_env = {
         "PATH": os.environ.get("PATH", "/usr/bin:/bin:/usr/local/bin:/opt/homebrew/bin"),
         "HOME": os.environ.get("HOME", "/tmp"),
@@ -142,60 +162,52 @@ def default_gh_repo_verifier(repo: str, pat: str) -> GitHubRepoCheckResult:
         "GH_TOKEN": pat,
         "GH_PROMPT_DISABLED": "1",
     }
-    argv = [
-        "gh",
-        "repo",
-        "view",
-        repo,
-        "--json",
-        "nameWithOwner,visibility,defaultBranchRef",
-    ]
+    # REST, not `gh repo view` (GraphQL): clearer HTTP errors and works with fine-grained tokens.
+    argv = ["gh", "api", f"repos/{repo}"]
     try:
         proc = subprocess.run(
             argv,
             env=scrubbed_env,
             capture_output=True,
             text=True,
-            timeout=10.0,
+            timeout=15.0,
             check=False,
         )
     except FileNotFoundError:
         return GitHubRepoCheckResult(
             ok=False,
             error_reason="github_credential",
-            error_detail="gh CLI not found on PATH",
+            error_detail="gh CLI not found on PATH. Install it from https://cli.github.com.",
         )
     except subprocess.TimeoutExpired:
         return GitHubRepoCheckResult(
             ok=False,
             error_reason="github_credential",
-            error_detail="gh repo view timed out",
+            error_detail="GitHub did not answer within 15 seconds. Check your network and try again.",
         )
 
     if proc.returncode != 0:
         return GitHubRepoCheckResult(
             ok=False,
             error_reason="github_credential",
-            error_detail="PAT check failed via gh repo view",
+            error_detail=_gh_failure(proc, repo, pat),
         )
 
     try:
         data = json.loads(proc.stdout)
-        vis_raw = str(data.get("visibility", "PRIVATE")).lower()
+        vis_raw = str(data.get("visibility") or ("private" if data.get("private") else "public")).lower()
         vis: Literal["private", "public", "internal"] = (
             "public"
             if vis_raw == "public"
             else ("internal" if vis_raw == "internal" else "private")
         )
-        branch = str(
-            (data.get("defaultBranchRef") or {}).get("name") or "main"
-        )
+        branch = str(data.get("default_branch") or "main")
         return GitHubRepoCheckResult(ok=True, visibility=vis, default_branch=branch)
-    except (json.JSONDecodeError, TypeError):
+    except (json.JSONDecodeError, TypeError, AttributeError):
         return GitHubRepoCheckResult(
             ok=False,
             error_reason="github_credential",
-            error_detail="Invalid JSON response from gh repo view",
+            error_detail="Invalid JSON response from gh api",
         )
 
 
@@ -583,6 +595,7 @@ def create_app(
                     "kind": m.kind,
                     "default_provider": m.default_provider,
                     "allowed_roles": sorted(m.allowed_roles),
+                    "suggested_models": suggested_models(m.name),
                 }
                 for m in ADAPTER_MANIFESTS.values()
             ],
@@ -644,6 +657,7 @@ def create_app(
             "project": dict(row),
             "verified": gh_res.ok,
             "error_reason": credential_reason,
+            "error_detail": None if gh_res.ok else gh_res.error_detail,
             "role_evaluation": _role_evaluation_dict(role_eval),
         }
 

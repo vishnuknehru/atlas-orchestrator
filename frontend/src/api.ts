@@ -257,7 +257,7 @@ export const atlasApi = {
     }),
   getTaskHistory: (taskId: string) => apiRequest<TaskHistoryResponse>(`/api/v1/tasks/${taskId}/history`),
   getTask: (taskId: string) => apiRequest<TaskRecord>(`/api/v1/tasks/${taskId}`),
-  taskAction: (taskId: string, action: "start" | "pause" | "resume" | "cancel" | "rebuild") =>
+  taskAction: (taskId: string, action: "start" | "pause" | "resume" | "cancel" | "rebuild" | "retry") =>
     apiRequest<TaskRecord>(`/api/v1/tasks/${taskId}/${action}`, {
       method: "POST",
     }),

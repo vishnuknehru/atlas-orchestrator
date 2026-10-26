@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import hmac
 import json
+import logging
 import os
 import re
 import subprocess
@@ -15,12 +16,13 @@ from pathlib import Path
 from typing import Any, Literal
 
 import yaml
-from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi import BackgroundTasks, FastAPI, HTTPException, Query, Request
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, Field
 
 from atlas import __version__
+from atlas.agents import adapter_for
 from atlas.analysis import make_analyse_handler
 from atlas.api.security import (
     CSRF_COOKIE_NAME,
@@ -32,6 +34,7 @@ from atlas.api.security import (
 from atlas.config.model_catalog import suggested_models
 from atlas.config.schemas import (
     ADAPTER_MANIFESTS,
+    AgentConfigEntry,
     AgentRegistryConfig,
     ProjectConfig,
     ProjectMetadataSpec,
@@ -62,6 +65,7 @@ from atlas.fsm.transitions import (
     bump_project_policy_version,
 )
 from atlas.planning import PlanContext, PlanGenerationError, PlanGeneratorFn, cli_plan_generator
+from atlas.planning.task_plan import AdapterFactory, make_plan_handler
 from atlas.recovery.startup import (
     InstanceLock,
     RecoverySummary,
@@ -333,6 +337,7 @@ def create_app(
     secret_store: SecretStore | None = None,
     gh_verifier: GitHubVerifierFn | None = None,
     plan_generator: PlanGeneratorFn | None = None,
+    agent_adapter_factory: AdapterFactory | None = None,
     allow_testserver: bool = False,
     acquire_lock: bool = True,
 ) -> FastAPI:
@@ -360,8 +365,15 @@ def create_app(
         def delete_secret(self, service: str, account: str | None = None) -> None:
             self._active().delete_secret(service, account)
 
+    def _lookup_agent(agent_id: str) -> AgentConfigEntry | None:
+        return load_agent_registry(resolved_dir).agents.get(agent_id)
+
     engine = LangGraphWorkflowEngine(
-        db, step_handlers={"analyse": make_analyse_handler(_LazyStore(), db.projects_dir)}
+        db,
+        step_handlers={
+            "analyse": make_analyse_handler(_LazyStore(), db.projects_dir),
+            "plan": make_plan_handler(db.projects_dir, _lookup_agent, agent_adapter_factory or adapter_for),
+        },
     )
     instance_lock = InstanceLock(resolved_dir)
     redactor = Redactor()
@@ -1398,21 +1410,53 @@ def create_app(
             "approvals": approvals, "remote_operations": operations,
         }))
 
-    @app.post("/api/v1/tasks/{task_id}/start")
-    def start_task_endpoint(task_id: str) -> dict[str, Any]:
+    def _run_in_background(task_id: str) -> None:
+        """Drive the task's built steps; failures leave the task in its last recorded state."""
         try:
-            engine.start_task(task_id)
+            engine.run_until_halt(task_id)
+        except Exception:  # noqa: BLE001 - a background crash must not take the server down
+            logging.getLogger("atlas.engine").exception("Task %s run failed", task_id)
+        with db.read_conn() as conn:
+            row = conn.execute("SELECT state FROM tasks WHERE id = ?;", (task_id,)).fetchone()
+        if row:
+            broadcaster.publish(
+                {"type": "task_transition", "task_id": task_id, "state": row["state"], "at": utc_now_iso()}
+            )
+
+    def _task_row(task_id: str) -> dict[str, Any]:
+        with db.read_conn() as conn:
+            row = conn.execute("SELECT * FROM tasks WHERE id = ?;", (task_id,)).fetchone()
+        return dict(row)
+
+    @app.post("/api/v1/tasks/{task_id}/start")
+    def start_task_endpoint(task_id: str, background: BackgroundTasks) -> dict[str, Any]:
+        try:
+            engine.begin_task(task_id)
         except EntityNotFoundError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         except (InvalidTransitionError, GuardFailedError) as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
-
-        with db.read_conn() as conn:
-            row = conn.execute("SELECT * FROM tasks WHERE id = ?;", (task_id,)).fetchone()
+        background.add_task(_run_in_background, task_id)
+        row = _task_row(task_id)
         broadcaster.publish(
             {"type": "task_transition", "task_id": task_id, "state": row["state"], "at": utc_now_iso()}
         )
-        return dict(row)
+        return row
+
+    @app.post("/api/v1/tasks/{task_id}/retry")
+    def retry_task_endpoint(task_id: str, background: BackgroundTasks) -> dict[str, Any]:
+        try:
+            engine.retry_task(task_id)
+        except EntityNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except (InvalidTransitionError, GuardFailedError) as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        background.add_task(_run_in_background, task_id)
+        row = _task_row(task_id)
+        broadcaster.publish(
+            {"type": "task_transition", "task_id": task_id, "state": row["state"], "at": utc_now_iso()}
+        )
+        return row
 
     @app.post("/api/v1/tasks/{task_id}/pause")
     def pause_task_endpoint(task_id: str) -> dict[str, Any]:

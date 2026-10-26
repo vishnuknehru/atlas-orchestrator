@@ -95,6 +95,12 @@ def _fail_closed_handler(
 
 WRITER_NODES: frozenset[str] = frozenset({"implement", "fix"})
 
+# Task states whose workflow step is built. Later states are added as their steps ship.
+TASK_STATE_NODES: dict[str, str] = {
+    TaskState.REPOSITORY_ANALYSIS.value: "analyse",
+    TaskState.PLANNING.value: "plan",
+}
+
 
 class LangGraphWorkflowEngine:
     """Executes Task and Phase state graphs with StrictJsonSerializer and ADR-006 guarantees."""
@@ -1477,13 +1483,10 @@ class LangGraphWorkflowEngine:
     # High-level Task lifecycle operations (Phase 1)
     # ------------------------------------------------------------------
 
-    def start_task(self, task_id: str) -> dict[str, Any]:
-        """Start a task from CREATED -> REPOSITORY_ANALYSIS -> run analysis step (fail-closed in Phase 1 unless handler injected)."""
+    def begin_task(self, task_id: str) -> None:
+        """Move a CREATED task to REPOSITORY_ANALYSIS without running any step."""
         with self.db.begin_immediate() as conn:
-            row = conn.execute(
-                "SELECT id, project_id, state, version, generation FROM tasks WHERE id = ?;",
-                (task_id,),
-            ).fetchone()
+            row = conn.execute("SELECT state FROM tasks WHERE id = ?;", (task_id,)).fetchone()
             if not row:
                 raise EntityNotFoundError(f"Task {task_id!r} not found")
             if row["state"] == TaskState.CREATED.value:
@@ -1494,8 +1497,45 @@ class LangGraphWorkflowEngine:
                     reason="Task started by user",
                     actor="user",
                 )
-        state = self.run_step_pair("task", task_id, "analyse")
-        return dict(state)
+
+    def start_task(self, task_id: str) -> dict[str, Any]:
+        """Start a task and run its built steps (blocking). The API uses begin_task + a background run instead."""
+        self.begin_task(task_id)
+        return self.run_until_halt(task_id)
+
+    def retry_task(self, task_id: str, *, actor: str = "user") -> dict[str, Any]:
+        """Send a BLOCKED task back to the state it was blocked in so its step can run again."""
+        with self.db.begin_immediate() as conn:
+            row = conn.execute("SELECT state, resume_to FROM tasks WHERE id = ?;", (task_id,)).fetchone()
+            if not row:
+                raise EntityNotFoundError(f"Task {task_id!r} not found")
+            if row["state"] != TaskState.BLOCKED.value or not row["resume_to"]:
+                raise InvalidTransitionError(f"Task {task_id!r} is in state {row['state']}, not BLOCKED")
+            target = str(row["resume_to"])
+            apply_task_transition(
+                conn,
+                task_id=task_id,
+                to_state=target,
+                reason=f"Retried by user from {target}",
+                actor=actor,
+            )
+        return {"id": task_id, "state": target}
+
+    def run_until_halt(self, task_id: str, *, max_steps: int = 10) -> dict[str, Any]:
+        """Run consecutive workflow steps until the task blocks, pauses, or reaches a state with no built step."""
+        last: dict[str, Any] = {}
+        for _ in range(max_steps):
+            with self.db.read_conn() as conn:
+                row = conn.execute("SELECT state FROM tasks WHERE id = ?;", (task_id,)).fetchone()
+            if not row:
+                raise EntityNotFoundError(f"Task {task_id!r} not found")
+            node = TASK_STATE_NODES.get(str(row["state"]))
+            if node is None:
+                break
+            last = dict(self.run_step_pair("task", task_id, node))
+            if last.get("halted"):
+                break
+        return last
 
     def resume_task(self, task_id: str) -> dict[str, Any]:
         """Resume a PAUSED task back to its recorded resume_to state."""

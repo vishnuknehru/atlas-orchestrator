@@ -50,7 +50,7 @@ def test_started_task_is_not_reported_diverged_on_restart(tmp_path: Path) -> Non
     client, headers, task_id = _register_and_create_task(tmp_path)
     r_start = client.post(f"/api/v1/tasks/{task_id}/start", headers=headers)
     assert r_start.status_code == 200, r_start.text
-    before = r_start.json()
+    before = client.get(f"/api/v1/tasks/{task_id}").json()
     assert before["state"] == TaskState.BLOCKED.value
 
     engine: LangGraphWorkflowEngine = client.app.state.engine

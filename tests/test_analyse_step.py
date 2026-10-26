@@ -69,6 +69,9 @@ PLAN_JSON = json.dumps(
 )
 
 
+CLEAN = json.dumps({"verdict": "approve", "findings": [{"id": "F1", "severity": "low", "text": "nit"}]})
+
+
 def _fake_factory(*results: AgentResult) -> tuple[FakeAdapter, Callable[[AgentConfigEntry], FakeAdapter]]:
     fake = FakeAdapter(list(results))
     return fake, lambda agent: fake
@@ -115,10 +118,10 @@ def test_start_without_token_blocks_with_a_clear_reason(tmp_path: Path) -> None:
     assert task["state"] == "BLOCKED" and task["blocked_reason"] == "no_github_token"
 
 
-def test_start_analyses_repository_plans_and_stops_at_plan_challenge(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_start_analyses_repository_plans_and_waits_for_approval(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     src = _remote(tmp_path)
     store = InMemorySecretStore()
-    fake, factory = _fake_factory(AgentResult.success(PLAN_JSON))
+    fake, factory = _fake_factory(AgentResult.success(PLAN_JSON), AgentResult.success(CLEAN))
     client, headers, pid = _client(tmp_path, store, factory)
     store.set_secret(f"atlas.{pid}.github", "atlas", "ghp_token")
     seen: dict[str, str] = {}
@@ -132,7 +135,7 @@ def test_start_analyses_repository_plans_and_stops_at_plan_challenge(tmp_path: P
     client.post(f"/api/v1/tasks/{tid}/start", headers=headers)
     body = client.get(f"/api/v1/tasks/{tid}").json()
     task = body.get("task", body)
-    assert (task["state"], task["blocked_reason"]) == ("PLAN_CHALLENGE", None)
+    assert (task["state"], task["blocked_reason"]) == ("AWAITING_APPROVAL", None)
     assert "Hello" in fake.requests[0].prompt and "do it" in fake.requests[0].prompt
     plan = json.loads((tmp_path / "atlas-home" / "projects" / pid / "plans" / f"{tid}.json").read_text())
     assert plan["author_agent"] == "claude" and plan["steps"][0]["title"] == "Do it"
@@ -150,6 +153,7 @@ def test_plan_failures_block_with_specific_reasons_and_retry_recovers(
         AgentResult.failed("rate_limit", "usage limit reached", 1),
         AgentResult.success("no json here"),
         AgentResult.success(PLAN_JSON),
+        AgentResult.success(CLEAN),
     )
     client, headers, pid = _client(tmp_path, store, factory)
     store.set_secret(f"atlas.{pid}.github", "atlas", "ghp_token")
@@ -165,7 +169,7 @@ def test_plan_failures_block_with_specific_reasons_and_retry_recovers(
     assert client.post(f"/api/v1/tasks/{tid}/retry", headers=headers).status_code == 200
     assert (task()["state"], task()["blocked_reason"]) == ("BLOCKED", "plan_invalid")
     client.post(f"/api/v1/tasks/{tid}/retry", headers=headers)
-    assert task()["state"] == "PLAN_CHALLENGE"
+    assert task()["state"] == "AWAITING_APPROVAL"
     assert client.post(f"/api/v1/tasks/{tid}/retry", headers=headers).status_code == 409
 
 

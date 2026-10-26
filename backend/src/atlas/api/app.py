@@ -54,7 +54,11 @@ from atlas.config.secret_store import (
     get_default_secret_store,
 )
 from atlas.db.connection import DatabaseManager
-from atlas.engine.workflow import LangGraphWorkflowEngine, RebuildPreconditionError
+from atlas.engine.workflow import (
+    CapabilityUnavailableError,
+    LangGraphWorkflowEngine,
+    RebuildPreconditionError,
+)
 from atlas.fsm.states import PhaseState, TaskState
 from atlas.fsm.transitions import (
     EntityNotFoundError,
@@ -65,6 +69,12 @@ from atlas.fsm.transitions import (
     bump_project_policy_version,
 )
 from atlas.planning import PlanContext, PlanGenerationError, PlanGeneratorFn, cli_plan_generator
+from atlas.planning.challenge import (
+    append_user_feedback,
+    load_plan_doc,
+    make_challenge_handler,
+    make_revise_handler,
+)
 from atlas.planning.task_plan import AdapterFactory, make_plan_handler
 from atlas.recovery.startup import (
     InstanceLock,
@@ -268,6 +278,12 @@ class CreateRoadmapRequest(BaseModel):
     goal: str = Field(min_length=10, max_length=ROADMAP_GOAL_MAX_CHARS)
 
 
+class RequestPlanChangesRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    comment: str = Field(min_length=3, max_length=4000)
+
+
 class CreateTaskRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
@@ -373,6 +389,10 @@ def create_app(
         step_handlers={
             "analyse": make_analyse_handler(_LazyStore(), db.projects_dir),
             "plan": make_plan_handler(db.projects_dir, _lookup_agent, agent_adapter_factory or adapter_for),
+            "challenge": make_challenge_handler(
+                db.projects_dir, _lookup_agent, agent_adapter_factory or adapter_for
+            ),
+            "revise": make_revise_handler(db.projects_dir, _lookup_agent, agent_adapter_factory or adapter_for),
         },
     )
     instance_lock = InstanceLock(resolved_dir)
@@ -1451,6 +1471,71 @@ def create_app(
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         except (InvalidTransitionError, GuardFailedError) as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
+        background.add_task(_run_in_background, task_id)
+        row = _task_row(task_id)
+        broadcaster.publish(
+            {"type": "task_transition", "task_id": task_id, "state": row["state"], "at": utc_now_iso()}
+        )
+        return row
+
+    def _task_project(task_id: str) -> tuple[str, str]:
+        with db.read_conn() as conn:
+            row = conn.execute("SELECT project_id, state FROM tasks WHERE id = ?;", (task_id,)).fetchone()
+        if row is None:
+            raise HTTPException(status_code=404, detail="Task not found")
+        return str(row["project_id"]), str(row["state"])
+
+    @app.get("/api/v1/tasks/{task_id}/plan")
+    def get_task_plan(task_id: str) -> dict[str, Any]:
+        project_id, _ = _task_project(task_id)
+        try:
+            return load_plan_doc(db.projects_dir, project_id, task_id)
+        except CapabilityUnavailableError as exc:
+            raise HTTPException(status_code=404, detail="No plan has been drafted for this task yet") from exc
+
+    @app.post("/api/v1/tasks/{task_id}/plan/approve")
+    def approve_task_plan(task_id: str) -> dict[str, Any]:
+        _task_project(task_id)
+        try:
+            with db.begin_immediate() as conn:
+                state = conn.execute("SELECT state FROM tasks WHERE id = ?;", (task_id,)).fetchone()["state"]
+                if state != TaskState.AWAITING_APPROVAL.value:
+                    raise HTTPException(status_code=409, detail=f"Task is in state {state}, not awaiting approval")
+                apply_task_transition(
+                    conn,
+                    task_id=task_id,
+                    to_state=TaskState.READY_FOR_IMPLEMENTATION.value,
+                    reason="Plan approved by user",
+                    actor="user",
+                )
+        except (InvalidTransitionError, GuardFailedError) as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        row = _task_row(task_id)
+        broadcaster.publish(
+            {"type": "task_transition", "task_id": task_id, "state": row["state"], "at": utc_now_iso()}
+        )
+        return row
+
+    @app.post("/api/v1/tasks/{task_id}/plan/request-changes")
+    def request_plan_changes(
+        task_id: str, req: RequestPlanChangesRequest, background: BackgroundTasks
+    ) -> dict[str, Any]:
+        project_id, _ = _task_project(task_id)
+        try:
+            with db.begin_immediate() as conn:
+                state = conn.execute("SELECT state FROM tasks WHERE id = ?;", (task_id,)).fetchone()["state"]
+                if state != TaskState.AWAITING_APPROVAL.value:
+                    raise HTTPException(status_code=409, detail=f"Task is in state {state}, not awaiting approval")
+                apply_task_transition(
+                    conn,
+                    task_id=task_id,
+                    to_state=TaskState.PLAN_REVISION.value,
+                    reason="Changes requested by user",
+                    actor="user",
+                )
+        except (InvalidTransitionError, GuardFailedError) as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        append_user_feedback(db.projects_dir, project_id, task_id, req.comment)
         background.add_task(_run_in_background, task_id)
         row = _task_row(task_id)
         broadcaster.publish(

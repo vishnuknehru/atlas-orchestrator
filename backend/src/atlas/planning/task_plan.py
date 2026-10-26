@@ -7,6 +7,7 @@ import sqlite3
 import tempfile
 from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
@@ -71,7 +72,8 @@ Respond with ONLY one JSON object, no prose and no code fences, in exactly this 
 Every acceptance criterion id must be covered by at least one step. Use at most {MAX_STEPS} steps."""
 
 
-def parse_task_plan(text: str, criterion_ids: set[str]) -> TaskPlan:
+def extract_json_object(text: str, required_key: str) -> dict[str, Any] | None:
+    """First JSON object in the agent's text that contains `required_key`."""
     decoder = json.JSONDecoder()
     for start, ch in enumerate(text):
         if ch != "{":
@@ -80,16 +82,42 @@ def parse_task_plan(text: str, criterion_ids: set[str]) -> TaskPlan:
             candidate, _ = decoder.raw_decode(text[start:])
         except json.JSONDecodeError:
             continue
-        if isinstance(candidate, dict) and "steps" in candidate:
-            try:
-                plan = TaskPlan.model_validate(candidate)
-            except ValidationError as exc:
-                raise CapabilityUnavailableError("plan_invalid") from exc
-            covered = {c for step in plan.steps for c in step.criteria}
-            if criterion_ids - covered:
-                raise CapabilityUnavailableError("plan_misses_criteria")
-            return plan
-    raise CapabilityUnavailableError("plan_invalid")
+        if isinstance(candidate, dict) and required_key in candidate:
+            return candidate
+    return None
+
+
+def validate_plan(candidate: dict[str, Any], criterion_ids: set[str]) -> TaskPlan:
+    try:
+        plan = TaskPlan.model_validate(candidate)
+    except ValidationError as exc:
+        raise CapabilityUnavailableError("plan_invalid") from exc
+    covered = {c for step in plan.steps for c in step.criteria}
+    if criterion_ids - covered:
+        raise CapabilityUnavailableError("plan_misses_criteria")
+    return plan
+
+
+def parse_task_plan(text: str, criterion_ids: set[str]) -> TaskPlan:
+    candidate = extract_json_object(text, "steps")
+    if candidate is None:
+        raise CapabilityUnavailableError("plan_invalid")
+    return validate_plan(candidate, criterion_ids)
+
+
+def run_agent(
+    adapter_factory: AdapterFactory, agent: AgentConfigEntry, agent_id: str, role: str, prompt: str
+) -> str:
+    """Run one read-only agent call in a scratch directory; failures become blocked reasons."""
+    with tempfile.TemporaryDirectory(prefix=f"atlas-{role}-") as tmp:
+        result: AgentResult = adapter_factory(agent).run(
+            AgentRequest(
+                agent_id=agent_id, role=role, prompt=prompt, cwd=Path(tmp), timeout_seconds=PLAN_TIMEOUT_SECONDS
+            )
+        )
+    if not result.ok:
+        raise CapabilityUnavailableError(_FAILURE_CODES.get(result.failure or "", "agent_failed"))
+    return result.output
 
 
 def make_plan_handler(
@@ -117,23 +145,16 @@ def make_plan_handler(
         prompt = build_task_prompt(
             str(task["title"]), str(task["request_text"]), criteria, json.loads(analysis_file.read_text())
         )
-        with tempfile.TemporaryDirectory(prefix="atlas-task-plan-") as tmp:
-            result: AgentResult = adapter_factory(agent).run(
-                AgentRequest(
-                    agent_id=roles.architect,
-                    role="architect",
-                    prompt=prompt,
-                    cwd=Path(tmp),
-                    timeout_seconds=PLAN_TIMEOUT_SECONDS,
-                )
-            )
-        if not result.ok:
-            raise CapabilityUnavailableError(_FAILURE_CODES.get(result.failure or "", "agent_failed"))
-        plan = parse_task_plan(result.output, {str(c["id"]) for c in criteria})
+        output = run_agent(adapter_factory, agent, roles.architect, "architect", prompt)
+        plan = parse_task_plan(output, {str(c["id"]) for c in criteria})
         out = projects_dir / project_id / "plans" / f"{entity_id}.json"
         out.parent.mkdir(parents=True, exist_ok=True)
         out.write_text(
-            json.dumps({"author_agent": roles.architect, **plan.model_dump()}, indent=2), encoding="utf-8"
+            json.dumps(
+                {"author_agent": roles.architect, "revision": 1, "history": [], "escalated": False, **plan.model_dump()},
+                indent=2,
+            ),
+            encoding="utf-8",
         )
         return StepHandlerResult(
             to_state=TaskState.PLAN_CHALLENGE.value,

@@ -81,11 +81,3 @@ def test_no_worktree_means_nothing_project_specific_is_writable(world: dict[str,
     argv = SeatbeltBoundary(home=world["home"]).wrap(["/bin/sh", "-c", f"echo x > {world['wt']}/f"], worktree=None)
     assert subprocess.run(argv, capture_output=True, timeout=30).returncode != 0
 
-
-def test_agent_profile_denies_the_sandbox_volume(world: dict[str, Path]) -> None:
-    from atlas.agents.boundary import DENY_VOLUMES
-
-    argv = SeatbeltBoundary(home=world["home"]).wrap(["/bin/sh", "-c", "true"], worktree=world["wt"])
-    profile = Path(argv[argv.index("-f") + 1]).read_text()
-    assert all(f"DENYVOL{i}" in profile for i in range(len(DENY_VOLUMES)))
-    assert "DENYVOL0=/Volumes/AtlasSandbox" in argv

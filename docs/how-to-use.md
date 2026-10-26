@@ -209,20 +209,12 @@ Model ids above are examples. Use the ones you actually run, pinned to exact ver
 
 ### Step 7. Set up the test sandbox (one time)
 **Available:** [P4]
-Tests run only inside Docker containers, in a dedicated Colima virtual machine (D11). This is the same on macOS and Linux. The exact flags are confirmed in Phase 4.
+Tests run only inside locked-down Docker containers in your existing Colima virtual machine (D11, amended by D16). This is the same on macOS and Linux.
 
-1. **Reserve disk space** for the virtual machine. You need admin rights.
-   - **macOS:** create a dedicated APFS volume. First find your container ID:
-     ```bash
-     diskutil apfs list
-     ```
-     Then create an 80 GB volume, replacing `<container>` with that ID:
-     ```bash
-     sudo diskutil apfs addVolume <container> APFS AtlasSandbox -reserve 80g -quota 80g
-     ```
-   - **Linux:** create a dedicated partition, or a fixed-size LVM logical volume (e.g. 80 GB), and mount it where ATLAS's Settings page says.
-2. **Start the ATLAS virtual machine.** Run `atlas sandbox command` (or open **Dashboard → Settings → Test sandbox**) and run the command it prints. It is `colima start atlas` with `COLIMA_HOME` on the volume from step 1, `--mount none` (no folders shared from your computer) and `--activate=false` (your current Docker context stays as it is). ATLAS refuses to run tests if the VM can see any of your folders.
-3. **Run the self-test:** `atlas sandbox selftest`, or **Run self-test** on the same page. It creates one container under the full security contract, checks the container's effective settings *before* starting it, then runs a trusted canary that asserts: no network interface except loopback, no Docker socket, user 10001, read-only source and root filesystem, no host folders visible. `atlas sandbox status` shows the read-only checks without starting anything.
+1. **Make sure Colima is running** (your existing Colima VM is used; ATLAS does not create a separate VM or reserve disk space). If it is stopped, run `atlas sandbox command` and run what it prints (`colima start --activate=false`).
+2. **Run the self-test:** `atlas sandbox selftest`, or **Run self-test** on **Dashboard → Settings → Test sandbox**. It downloads one small pinned helper image (Alpine, by digest), creates one container under the full security contract, checks the container's effective settings *before* starting it, then runs a trusted canary that asserts: no network interface except loopback, no Docker socket, user 10001, read-only source and root filesystem, no host folders visible. `atlas sandbox status` shows the read-only checks without starting anything.
+
+**Know the trade-off (D16):** Colima shares your home folder into its VM by default. Containers never get it, but a container escape would reach it, and the same VM serves your other containers. Settings shows this as a warning. Run `colima stop` when you are not working to free its 2 GB of RAM.
 
 ✅ **Done when** Settings → Test sandbox shows the sandbox as ready. If it isn't ready, projects show `BLOCKED(no_test_sandbox)` with the reason, and no tests run: ATLAS never runs tests or dependency setup outside the sandbox. (Developer agents are different: they edit code in worktrees on your computer, inside their own CLI sandboxes. See [Part 8](#part-8-what-atlas-will-never-do).)
 

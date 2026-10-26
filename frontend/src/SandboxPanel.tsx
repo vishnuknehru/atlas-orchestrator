@@ -24,7 +24,7 @@ export function SandboxPanel(): React.ReactElement {
     setBusy(true); setError(null);
     try {
       const result = await atlasApi.runSandboxSelfTest();
-      setStatus((prev) => ({ ...result, start_command: prev?.start_command, volume_command: prev?.volume_command }));
+      setStatus((prev) => ({ ...result, start_command: prev?.start_command }));
     } catch (err) { setError(err instanceof Error ? err.message : "The self-test failed to run"); }
     finally { setBusy(false); }
   };
@@ -35,7 +35,7 @@ export function SandboxPanel(): React.ReactElement {
         <div>
           <h2 className="text-base font-semibold text-stone-900">Test sandbox</h2>
           <p className="text-xs text-stone-500">
-            Tests run only in a locked-down VM on a reserved volume. Until it is ready, no tests run and no task can complete.
+            Tests run only in locked-down containers in your Colima VM. Until it is ready, no tests run and no task can complete.
           </p>
         </div>
         {status && (
@@ -49,7 +49,7 @@ export function SandboxPanel(): React.ReactElement {
         <ul className="text-sm space-y-1">
           {status.checks.map((c) => (
             <li key={c.id}>
-              <span aria-hidden="true">{c.ok ? "✓" : "✗"}</span> <span className="sr-only">{c.ok ? "passed: " : "failed: "}</span>
+              <span aria-hidden="true">{c.ok ? "✓" : c.level === "warning" ? "!" : "✗"}</span> <span className="sr-only">{c.ok ? "passed: " : c.level === "warning" ? "warning: " : "failed: "}</span>
               {c.label}{c.detail && <span className="text-stone-500"> — {c.detail}</span>}
             </li>
           ))}
@@ -57,9 +57,8 @@ export function SandboxPanel(): React.ReactElement {
       )}
       {status && !status.ready && (
         <div className="text-xs space-y-2">
-          {status.volume_command && (<><p>1. Once, create the reserved volume (needs your admin password):</p><pre className="bg-stone-100 rounded p-2 overflow-x-auto">{status.volume_command}</pre></>)}
-          {status.start_command && (<><p>2. Start the sandbox VM:</p><pre className="bg-stone-100 rounded p-2 overflow-x-auto">{status.start_command}</pre></>)}
-          <p>3. Run the self-test.</p>
+          {status.start_command && (<><p>1. Start the Colima VM:</p><pre className="bg-stone-100 rounded p-2 overflow-x-auto">{status.start_command}</pre></>)}
+          <p>2. Run the self-test.</p>
         </div>
       )}
       <div className="flex gap-2">

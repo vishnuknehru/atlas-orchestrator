@@ -111,11 +111,12 @@ def run_self_test(paths: SandboxPaths | None = None, runner: Runner = default_ru
     """Status checks first; only if the VM is sound do we create, verify and run the canary container."""
     p = paths or SandboxPaths()
     status = sandbox_status(p, runner)
-    gate = [c for c in status.checks if c.id != "image"]
+    by_id = {c.id: c for c in status.checks}
+    gate = [by_id["vm_running"], by_id["daemon"]]
     if not all(c.ok for c in gate):
         return gate
-    results = list(gate)
-    if not status.checks[-1].ok:
+    results = [*gate, by_id["host_mounts"]]
+    if not by_id["image"].ok:
         pull = docker(p, runner, "pull", "--quiet", APPROVED_HELPER_IMAGE)
         pulled = pull.returncode == 0
         results.append(Check("image", "Approved helper image downloaded by digest", pulled, "" if pulled else (pull.stderr or "pull failed").strip()[-200:]))

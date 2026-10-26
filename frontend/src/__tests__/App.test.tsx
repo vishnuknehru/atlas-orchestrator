@@ -147,6 +147,32 @@ describe("ATLAS Dashboard v1", () => {
     expect(titles).toEqual(["Phase 1: Step 1", "Phase 2: Step 2"]);
   });
 
+  it("offers Retry on a blocked task and posts the retry action", async () => {
+    window.location.hash = "#/projects/proj-1/tasks/task-1";
+    const blocked = { ...mockOverview.tasks[0], state: "BLOCKED", blocked_reason: "agent_rate_limit", resume_to: "PLANNING" };
+    const calls: string[] = [];
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+      const url = typeof input === "string" ? input : input.toString();
+      if (url.endsWith("/api/v1/tasks/task-1/retry")) {
+        calls.push(`${init?.method} retry`);
+        return new Response(JSON.stringify({ ...blocked, state: "PLANNING", blocked_reason: null }), { status: 200 });
+      }
+      if (url.endsWith("/api/v1/overview")) {
+        return new Response(JSON.stringify({ ...mockOverview, tasks: [blocked] }), { status: 200 });
+      }
+      if (url.endsWith("/api/v1/tasks/task-1/history")) {
+        return new Response(JSON.stringify({ task: { ...mockTaskDetail, ...blocked }, workflow_thread_id: "task:task-1", executions: [], workflow_steps: [], approvals: [], artifacts: [], remote_operations: [], exported_at: "" }), { status: 200 });
+      }
+      if (url.endsWith("/api/v1/tasks/task-1")) {
+        return new Response(JSON.stringify({ ...mockTaskDetail, ...blocked }), { status: 200 });
+      }
+      return new Response(JSON.stringify({}), { status: 200 });
+    });
+    render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: "Retry" }));
+    await waitFor(() => expect(calls).toEqual(["POST retry"]));
+  });
+
   it("renders projects, recovery banner, and persisted transitions timeline", async () => {
     render(<App />);
 

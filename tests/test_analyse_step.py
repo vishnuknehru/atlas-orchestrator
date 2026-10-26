@@ -4,14 +4,17 @@ from __future__ import annotations
 
 import json
 import subprocess
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
 
+from atlas.agents import AgentResult, FakeAdapter
 from atlas.analysis import CheckoutError, ensure_checkout, scan_repository
 from atlas.analysis import repo as repo_mod
 from atlas.api.app import GitHubRepoCheckResult, create_app
+from atlas.config.schemas import AgentConfigEntry
 from atlas.config.secret_store import InMemorySecretStore
 
 _ORIGIN = "http://127.0.0.1:8420"
@@ -57,11 +60,30 @@ def test_ensure_checkout_reports_failure_without_leaking_token(tmp_path: Path) -
     assert err.value.code == "clone_failed" and "ghp_supersecret" not in str(err.value)
 
 
-def _client(tmp_path: Path, store: InMemorySecretStore) -> tuple[TestClient, dict[str, str], str]:
+PLAN_JSON = json.dumps(
+    {
+        "approach": "Add it.",
+        "steps": [{"title": "Do it", "description": "Edit app.py", "files": ["app.py"], "criteria": ["AC-1"]}],
+        "risks": [],
+    }
+)
+
+
+def _fake_factory(*results: AgentResult) -> tuple[FakeAdapter, Callable[[AgentConfigEntry], FakeAdapter]]:
+    fake = FakeAdapter(list(results))
+    return fake, lambda agent: fake
+
+
+def _client(
+    tmp_path: Path,
+    store: InMemorySecretStore,
+    factory: Callable[[AgentConfigEntry], FakeAdapter] | None = None,
+) -> tuple[TestClient, dict[str, str], str]:
     app = create_app(
         data_dir=tmp_path / "atlas-home",
         secret_store=store,
         gh_verifier=lambda repo, pat: GitHubRepoCheckResult(ok=True, visibility="private", default_branch="main"),
+        agent_adapter_factory=factory,
         allow_testserver=True,
         acquire_lock=False,
     )
@@ -93,10 +115,11 @@ def test_start_without_token_blocks_with_a_clear_reason(tmp_path: Path) -> None:
     assert task["state"] == "BLOCKED" and task["blocked_reason"] == "no_github_token"
 
 
-def test_start_analyses_repository_and_moves_to_planning(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_start_analyses_repository_plans_and_stops_at_plan_challenge(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     src = _remote(tmp_path)
     store = InMemorySecretStore()
-    client, headers, pid = _client(tmp_path, store)
+    fake, factory = _fake_factory(AgentResult.success(PLAN_JSON))
+    client, headers, pid = _client(tmp_path, store, factory)
     store.set_secret(f"atlas.{pid}.github", "atlas", "ghp_token")
     seen: dict[str, str] = {}
 
@@ -109,7 +132,46 @@ def test_start_analyses_repository_and_moves_to_planning(tmp_path: Path, monkeyp
     client.post(f"/api/v1/tasks/{tid}/start", headers=headers)
     body = client.get(f"/api/v1/tasks/{tid}").json()
     task = body.get("task", body)
-    assert task["state"] == "PLANNING"
+    assert (task["state"], task["blocked_reason"]) == ("PLAN_CHALLENGE", None)
+    assert "Hello" in fake.requests[0].prompt and "do it" in fake.requests[0].prompt
+    plan = json.loads((tmp_path / "atlas-home" / "projects" / pid / "plans" / f"{tid}.json").read_text())
+    assert plan["author_agent"] == "claude" and plan["steps"][0]["title"] == "Do it"
     assert seen == {"url": "https://github.com/octocat/p.git", "branch": "main", "pat": "ghp_token"}
     analysis = json.loads((tmp_path / "atlas-home" / "projects" / pid / "analysis" / f"{tid}.json").read_text())
     assert analysis["manifests"] == ["pyproject.toml"]
+
+
+def test_plan_failures_block_with_specific_reasons_and_retry_recovers(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    src = _remote(tmp_path)
+    store = InMemorySecretStore()
+    fake, factory = _fake_factory(
+        AgentResult.failed("rate_limit", "usage limit reached", 1),
+        AgentResult.success("no json here"),
+        AgentResult.success(PLAN_JSON),
+    )
+    client, headers, pid = _client(tmp_path, store, factory)
+    store.set_secret(f"atlas.{pid}.github", "atlas", "ghp_token")
+    monkeypatch.setattr(repo_mod, "ensure_checkout", lambda p, url, b, pat: ensure_checkout(p, str(src), b, pat))
+    tid = _task(client, headers, pid)
+
+    def task() -> dict[str, str]:
+        body = client.get(f"/api/v1/tasks/{tid}").json()
+        return body.get("task", body)
+
+    client.post(f"/api/v1/tasks/{tid}/start", headers=headers)
+    assert (task()["state"], task()["blocked_reason"]) == ("BLOCKED", "agent_rate_limit")
+    assert client.post(f"/api/v1/tasks/{tid}/retry", headers=headers).status_code == 200
+    assert (task()["state"], task()["blocked_reason"]) == ("BLOCKED", "plan_invalid")
+    client.post(f"/api/v1/tasks/{tid}/retry", headers=headers)
+    assert task()["state"] == "PLAN_CHALLENGE"
+    assert client.post(f"/api/v1/tasks/{tid}/retry", headers=headers).status_code == 409
+
+
+def test_plan_must_cover_every_acceptance_criterion() -> None:
+    from atlas.engine.workflow import CapabilityUnavailableError
+    from atlas.planning.task_plan import parse_task_plan
+
+    with pytest.raises(CapabilityUnavailableError, match="plan_misses_criteria"):
+        parse_task_plan(PLAN_JSON, {"AC-2"})

@@ -309,6 +309,8 @@ Open **Dashboard → your project → New task** and fill in:
 4. **Acceptance criteria:** how you'll know it's done. Each one gets an ID, and QA must answer every one.
 5. Click **Start**.
 
+**What runs today:** Start clones your repository (using the project's GitHub token from Settings), scans it, then asks the project's architect agent for an implementation plan and stops at **Plan challenge**, because the challenge, implementation, test, review and delivery steps are not built yet. If a step cannot run (no token, agent not signed in, usage limit, plan not valid), the task shows **Needs attention** with the reason. Fix the cause, then click **Retry**.
+
 ### Step 12. Review and approve the plan
 **Available:** [P3]
 Watch the task's **Timeline**. ATLAS:

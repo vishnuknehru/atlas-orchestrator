@@ -183,7 +183,7 @@ export function App(): React.ReactElement {
 
   const handleTaskAction = async (
     taskId: string,
-    action: "start" | "pause" | "resume" | "cancel" | "rebuild"
+    action: "start" | "pause" | "resume" | "cancel" | "rebuild" | "retry"
   ) => {
     if (pending) return;
     if (action === "cancel" && !window.confirm("Cancel this task? It will stop progressing and cannot be resumed.")) return;
@@ -196,6 +196,18 @@ export function App(): React.ReactElement {
       setError(err instanceof Error ? err.message : `Failed to ${action} task`);
     } finally { setPending(null); }
   };
+
+  const running = (overview?.tasks ?? []).some((t) => t.state === "REPOSITORY_ANALYSIS" || t.state === "PLANNING");
+  const selectedTaskId = selectedTask?.id;
+  useEffect(() => {
+    if (!running) return;
+    const timer = setInterval(() => {
+      void loadData();
+      if (selectedTaskId) void loadTaskDetail(selectedTaskId);
+    }, 3000);
+    return () => clearInterval(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [running, selectedTaskId]);
 
   const currentProject: ProjectRecord | undefined = overview?.projects.find(
     (p) => p.id === selectedProjectId
@@ -586,6 +598,16 @@ export function App(): React.ReactElement {
                           Resume
                         </button>
                       )}
+                      {selectedTask.state === "BLOCKED" &&
+                        selectedTask.blocked_reason !== "engine_state_divergence" && (
+                          <button
+                            type="button"
+                            onClick={() => void handleTaskAction(selectedTask.id, "retry")}
+                            className="bg-teal-800 hover:bg-teal-900 text-stone-900 text-xs font-medium px-3 py-1 rounded"
+                          >
+                            Retry
+                          </button>
+                        )}
                       {selectedTask.blocked_reason === "engine_state_divergence" && (
                         <button
                           type="button"

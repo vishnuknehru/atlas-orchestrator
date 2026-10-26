@@ -77,6 +77,27 @@ export interface TaskRecord {
   timeline?: TransitionRecord[];
 }
 
+export interface PlanFinding {
+  id: string;
+  severity: "critical" | "high" | "medium" | "low";
+  text: string;
+}
+
+export type PlanHistoryEntry =
+  | { kind: "challenge"; cycle: number; revision: number; challenger: string; verdict: "approve" | "revise"; findings: PlanFinding[] }
+  | { kind: "revision"; revision: number; responses: Array<{ finding_id: string; response: string }> }
+  | { kind: "user_feedback"; text: string };
+
+export interface TaskPlan {
+  author_agent: string;
+  revision: number;
+  approach: string;
+  steps: Array<{ title: string; description: string; files: string[]; criteria: string[] }>;
+  risks: string[];
+  escalated: boolean;
+  history: PlanHistoryEntry[];
+}
+
 export interface RoadmapRecord {
   id: string;
   project_id: string;
@@ -256,6 +277,14 @@ export const atlasApi = {
       body: JSON.stringify({ goal }),
     }),
   getTaskHistory: (taskId: string) => apiRequest<TaskHistoryResponse>(`/api/v1/tasks/${taskId}/history`),
+  getTaskPlan: (taskId: string) => apiRequest<TaskPlan>(`/api/v1/tasks/${taskId}/plan`),
+  approvePlan: (taskId: string) =>
+    apiRequest<TaskRecord>(`/api/v1/tasks/${taskId}/plan/approve`, { method: "POST" }),
+  requestPlanChanges: (taskId: string, comment: string) =>
+    apiRequest<TaskRecord>(`/api/v1/tasks/${taskId}/plan/request-changes`, {
+      method: "POST",
+      body: JSON.stringify({ comment }),
+    }),
   getTask: (taskId: string) => apiRequest<TaskRecord>(`/api/v1/tasks/${taskId}`),
   taskAction: (taskId: string, action: "start" | "pause" | "resume" | "cancel" | "rebuild" | "retry") =>
     apiRequest<TaskRecord>(`/api/v1/tasks/${taskId}/${action}`, {

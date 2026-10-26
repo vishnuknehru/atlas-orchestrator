@@ -99,6 +99,8 @@ WRITER_NODES: frozenset[str] = frozenset({"implement", "fix"})
 TASK_STATE_NODES: dict[str, str] = {
     TaskState.REPOSITORY_ANALYSIS.value: "analyse",
     TaskState.PLANNING.value: "plan",
+    TaskState.PLAN_CHALLENGE.value: "challenge",
+    TaskState.PLAN_REVISION.value: "revise",
 }
 
 

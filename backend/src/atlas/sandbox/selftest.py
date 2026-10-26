@@ -4,16 +4,11 @@ then a trusted canary that asserts what repository code would be able to see. No
 from __future__ import annotations
 
 import json
-from typing import Any
 
 from atlas.sandbox.checks import Check, Runner, default_runner, docker, sandbox_status
 from atlas.sandbox.config import APPROVED_HELPER_IMAGE, SandboxPaths
+from atlas.sandbox.contract import USER, contract_args, verify_contract
 from atlas.utils import new_ulid
-
-USER = "10001:10001"
-PIDS_LIMIT = 128
-MEMORY = "256m"
-CPUS = "1"
 
 # Busybox sh; prints `key value` lines that `parse_canary` turns into checks.
 CANARY_SCRIPT = r"""
@@ -25,65 +20,6 @@ if touch /probe-rootfs 2>/dev/null; then echo "rootfs writable"; else echo "root
 for d in /Users /Volumes /host /mnt/host /home/user; do [ -e "$d" ] && echo "hostpath $d"; done
 echo "done"
 """
-
-
-def contract_args(execution_id: str, role: str, volume: str) -> list[str]:
-    """`docker create` arguments for one repository-code container (security-model.md 5.1.4)."""
-    return [
-        "create", "--name", f"atlas-{execution_id}-{role}",
-        "--network", "none",
-        "--user", USER,
-        "--cap-drop", "ALL",
-        "--security-opt", "no-new-privileges",
-        "--read-only",
-        "--tmpfs", "/tmp:rw,noexec,nosuid,size=16m",
-        "--pids-limit", str(PIDS_LIMIT),
-        "--memory", MEMORY,
-        "--cpus", CPUS,
-        "--log-driver", "local", "--log-opt", "max-size=1m",
-        "--label", f"atlas.execution_id={execution_id}",
-        "--label", f"atlas.role={role}",
-        "-v", f"{volume}:/work:ro",
-        APPROVED_HELPER_IMAGE,
-        "sh", "-c", CANARY_SCRIPT,
-    ]
-
-
-def verify_contract(inspected: dict[str, Any], volume: str, execution_id: str, role: str) -> list[str]:
-    """Deviations of the effective container configuration from the contract. Empty means it matches."""
-    host = inspected.get("HostConfig", {})
-    config = inspected.get("Config", {})
-    problems: list[str] = []
-
-    def expect(ok: bool, message: str) -> None:
-        if not ok:
-            problems.append(message)
-
-    expect(host.get("NetworkMode") == "none", "network is not 'none'")
-    expect(host.get("CapDrop") == ["ALL"] and not host.get("CapAdd"), "capabilities are not fully dropped")
-    expect(host.get("Privileged") is False, "container is privileged")
-    expect(host.get("ReadonlyRootfs") is True, "root filesystem is writable")
-    expect(config.get("User") == USER, f"user is not {USER}")
-    expect(any(o.startswith("no-new-privileges") for o in host.get("SecurityOpt") or []), "no-new-privileges missing")
-    expect(int(host.get("PidsLimit") or 0) > 0, "no PID limit")
-    expect(int(host.get("Memory") or 0) > 0, "no memory limit")
-    expect(int(host.get("NanoCpus") or 0) > 0, "no CPU limit")
-    expect(not host.get("Devices"), "devices are attached")
-    expect(not host.get("Binds") or host.get("Binds") == [f"{volume}:/work:ro"], "unexpected bind mounts")
-    mounts = inspected.get("Mounts") or []
-    expect(
-        len(mounts) == 1
-        and mounts[0].get("Type") == "volume"
-        and mounts[0].get("Name") == volume
-        and mounts[0].get("Destination") == "/work"
-        and mounts[0].get("RW") is False,
-        "mounts are not exactly the read-only source volume",
-    )
-    expect("/tmp" in (host.get("Tmpfs") or {}), "/tmp is not a tmpfs")
-    labels = config.get("Labels") or {}
-    expect(labels.get("atlas.execution_id") == execution_id and labels.get("atlas.role") == role, "labels missing")
-    expect(config.get("Image") == APPROVED_HELPER_IMAGE, "image is not the approved digest")
-    return problems
 
 
 def parse_canary(output: str) -> list[Check]:
@@ -131,7 +67,10 @@ def run_self_test(paths: SandboxPaths | None = None, runner: Runner = default_ru
         made = docker(p, runner, "volume", "create", "--label", f"atlas.execution_id={execution_id}", volume)
         if made.returncode != 0:
             return [*results, Check("volume", "Created the empty source volume", False, made.stderr.strip()[-200:])]
-        created = docker(p, runner, *contract_args(execution_id, role, volume))
+        created = docker(p, runner, *contract_args(
+            execution_id, role, volume, ["sh", "-c", CANARY_SCRIPT],
+            tmp_options="/tmp:rw,noexec,nosuid,size=16m",
+        ))
         if created.returncode != 0:
             return [*results, Check("contract", "Container created under the contract", False, created.stderr.strip()[-200:])]
         inspected = docker(p, runner, "inspect", name)

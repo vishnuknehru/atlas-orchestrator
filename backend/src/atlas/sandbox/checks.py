@@ -7,11 +7,18 @@ import os
 import subprocess
 from collections.abc import Callable
 from dataclasses import asdict, dataclass
-from typing import Any
+from typing import Any, Protocol
 
 from atlas.sandbox.config import APPROVED_HELPER_IMAGE, SandboxPaths, start_command
 
-Runner = Callable[[list[str], dict[str, str]], "subprocess.CompletedProcess[str]"]
+
+class Runner(Protocol):
+    """Runs one command. `stdin` is streamed to it; `timeout` (seconds) overrides the default."""
+
+    def __call__(
+        self, argv: list[str], env: dict[str, str], *, stdin: bytes | None = None, timeout: int | None = None
+    ) -> subprocess.CompletedProcess[str]: ...
+
 
 HOST_MOUNT_FSTYPES = frozenset({"virtiofs", "9p", "9pnet", "fuse.sshfs", "vboxsf", "fuse.virtiofs"})
 
@@ -45,21 +52,28 @@ def base_env() -> dict[str, str]:
     return {"PATH": os.environ.get("PATH", "/usr/bin:/bin:/usr/local/bin:/opt/homebrew/bin"), "HOME": os.environ.get("HOME", "")}
 
 
-def default_runner(argv: list[str], env: dict[str, str]) -> subprocess.CompletedProcess[str]:
+def default_runner(
+    argv: list[str], env: dict[str, str], *, stdin: bytes | None = None, timeout: int | None = None
+) -> subprocess.CompletedProcess[str]:
     try:
-        return subprocess.run(argv, env=env, capture_output=True, text=True, timeout=120, check=False)
+        proc = subprocess.run(argv, env=env, input=stdin, capture_output=True, timeout=timeout or 120, check=False)
     except FileNotFoundError:
         return subprocess.CompletedProcess(argv, 127, "", f"{argv[0]}: command not found")
     except subprocess.TimeoutExpired:
         return subprocess.CompletedProcess(argv, 124, "", f"{argv[0]} timed out")
+    return subprocess.CompletedProcess(
+        argv, proc.returncode, proc.stdout.decode(errors="replace"), proc.stderr.decode(errors="replace")
+    )
 
 
-def docker(paths: SandboxPaths, runner: Runner, *args: str) -> subprocess.CompletedProcess[str]:
-    return runner(["docker", "-H", paths.docker_endpoint, *args], base_env())
+def docker(
+    paths: SandboxPaths, runner: Runner, *args: str, stdin: bytes | None = None, timeout: int | None = None
+) -> subprocess.CompletedProcess[str]:
+    return runner(["docker", "-H", paths.docker_endpoint, *args], base_env(), stdin=stdin, timeout=timeout)
 
 
 def colima(paths: SandboxPaths, runner: Runner, *args: str) -> subprocess.CompletedProcess[str]:
-    return runner(["colima", *args], {**base_env(), "COLIMA_HOME": str(paths.colima_home)})
+    return runner(["colima", *args], {**base_env(), "COLIMA_HOME": str(paths.colima_home)}, stdin=None, timeout=None)
 
 
 def check_vm_running(paths: SandboxPaths, runner: Runner) -> Check:

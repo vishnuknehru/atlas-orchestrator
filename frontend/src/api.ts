@@ -124,6 +124,24 @@ export interface SandboxStatus {
   start_command?: string;
 }
 
+export interface TestsConfig {
+  image?: string | null;
+  commands: string[];
+  writable_paths: string[];
+  timeout_seconds: number;
+}
+
+export interface TestEvidence {
+  status: "running" | "passed" | "failed" | "blocked";
+  commit_sha: string;
+  stale?: boolean;
+  blocked_reason?: string | null;
+  detail?: string;
+  image?: string;
+  source_attested?: boolean;
+  commands: Array<{ command: string; status: string; exit_code: number | null; seconds: number; log: string }>;
+}
+
 export interface RoadmapRecord {
   id: string;
   project_id: string;
@@ -303,6 +321,11 @@ export const atlasApi = {
       body: JSON.stringify({ goal }),
     }),
   getTaskHistory: (taskId: string) => apiRequest<TaskHistoryResponse>(`/api/v1/tasks/${taskId}/history`),
+  getTestsConfig: (projectId: string) => apiRequest<TestsConfig>(`/api/v1/projects/${projectId}/tests-config`),
+  saveTestsConfig: (projectId: string, cfg: { test_image: string; test_commands: string[]; writable_paths: string[]; test_timeout_seconds: number }) =>
+    apiRequest<ProjectRecord>(`/api/v1/projects/${projectId}/config`, { method: "PUT", body: JSON.stringify(cfg) }),
+  getTaskTests: (taskId: string) => apiRequest<TestEvidence>(`/api/v1/tasks/${taskId}/tests`),
+  runTaskTests: (taskId: string) => apiRequest<{ status: string }>(`/api/v1/tasks/${taskId}/tests/run`, { method: "POST" }),
   getSandbox: () => apiRequest<SandboxStatus>("/api/v1/sandbox"),
   runSandboxSelfTest: () => apiRequest<SandboxStatus>("/api/v1/sandbox/selftest", { method: "POST" }),
   getTaskPlan: (taskId: string) => apiRequest<TaskPlan>(`/api/v1/tasks/${taskId}/plan`),

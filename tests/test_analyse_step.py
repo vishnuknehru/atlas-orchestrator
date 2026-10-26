@@ -81,12 +81,14 @@ def _client(
     tmp_path: Path,
     store: InMemorySecretStore,
     factory: Callable[[AgentConfigEntry], FakeAdapter] | None = None,
+    test_runner: Callable[..., object] | None = None,
 ) -> tuple[TestClient, dict[str, str], str]:
     app = create_app(
         data_dir=tmp_path / "atlas-home",
         secret_store=store,
         gh_verifier=lambda repo, pat: GitHubRepoCheckResult(ok=True, visibility="private", default_branch="main"),
         agent_adapter_factory=factory,
+        test_runner=test_runner,  # type: ignore[arg-type]
         allow_testserver=True,
         acquire_lock=False,
     )

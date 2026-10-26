@@ -68,7 +68,13 @@ from atlas.fsm.transitions import (
     apply_task_transition,
     bump_project_policy_version,
 )
-from atlas.implementation import load_candidate, make_implement_handler
+from atlas.implementation import (
+    load_candidate,
+    load_test_evidence,
+    make_implement_handler,
+    run_task_tests,
+)
+from atlas.implementation.test_evidence import RunFn
 from atlas.planning import PlanContext, PlanGenerationError, PlanGeneratorFn, cli_plan_generator
 from atlas.planning.challenge import (
     append_user_feedback,
@@ -84,6 +90,7 @@ from atlas.recovery.startup import (
     sync_registry_to_db,
 )
 from atlas.sandbox import sandbox_status
+from atlas.sandbox.runner import validate_test_config
 from atlas.sandbox.selftest import run_self_test
 from atlas.utils import ensure_secure_dir, new_ulid, utc_now_iso
 
@@ -254,6 +261,9 @@ class UpdateProjectConfigRequest(BaseModel):
     agents: ProjectRoleMapping | None = None
     required_checks: list[str] | None = None
     writable_paths: list[str] | None = None
+    test_image: str | None = None
+    test_commands: list[str] | None = None
+    test_timeout_seconds: int | None = Field(default=None, ge=10, le=3600)
 
 
 class AcceptanceCriterionInput(BaseModel):
@@ -357,6 +367,7 @@ def create_app(
     gh_verifier: GitHubVerifierFn | None = None,
     plan_generator: PlanGeneratorFn | None = None,
     agent_adapter_factory: AdapterFactory | None = None,
+    test_runner: RunFn | None = None,
     allow_testserver: bool = False,
     acquire_lock: bool = True,
 ) -> FastAPI:
@@ -1020,6 +1031,15 @@ def create_app(
         res["role_evaluation"] = _role_evaluation_dict(role_eval)
         return res
 
+    @app.get("/api/v1/projects/{project_id}/tests-config")
+    def get_project_tests_config(project_id: str) -> dict[str, Any]:
+        with db.read_conn() as conn:
+            row = conn.execute("SELECT config_json FROM projects WHERE id = ?;", (project_id,)).fetchone()
+        if row is None:
+            raise HTTPException(status_code=404, detail="Project not found")
+        tests: dict[str, Any] = json.loads(row["config_json"]).get("tests", {})
+        return tests
+
     @app.put("/api/v1/projects/{project_id}/config")
     def update_project_config(
         project_id: str, req: UpdateProjectConfigRequest
@@ -1056,6 +1076,17 @@ def create_app(
                 cfg_data.setdefault("ci", {})["required_checks"] = req.required_checks
             if req.writable_paths is not None:
                 cfg_data.setdefault("tests", {})["writable_paths"] = req.writable_paths
+            if req.test_image is not None:
+                cfg_data.setdefault("tests", {})["image"] = req.test_image or None
+            if req.test_commands is not None:
+                cfg_data.setdefault("tests", {})["commands"] = [c for c in req.test_commands if c.strip()]
+            if req.test_timeout_seconds is not None:
+                cfg_data.setdefault("tests", {})["timeout_seconds"] = req.test_timeout_seconds
+            if any(v is not None for v in (req.test_image, req.test_commands, req.writable_paths)):
+                try:
+                    validate_test_config(cfg_data.get("tests", {}))
+                except ValueError as exc:
+                    raise HTTPException(status_code=422, detail=str(exc)) from exc
 
             validated_cfg = ProjectConfig.model_validate(cfg_data)
             role_eval = evaluate_project_roles(
@@ -1447,10 +1478,34 @@ def create_app(
             "approvals": approvals, "remote_operations": operations,
         }))
 
+    def _test_candidate(task_id: str, *, only_if_untested: bool) -> None:
+        """Run the task's candidate through the test sandbox. Evidence is bound to the candidate commit."""
+        with db.read_conn() as conn:
+            row = conn.execute(
+                "SELECT t.project_id, t.state, p.config_json, p.clone_path FROM tasks t "
+                "JOIN projects p ON p.id = t.project_id WHERE t.id = ?;",
+                (task_id,),
+            ).fetchone()
+        if row is None or row["state"] != TaskState.EXECUTING_PHASES.value:
+            return
+        project_id = str(row["project_id"])
+        candidate = load_candidate(db.projects_dir, project_id, task_id)
+        if candidate is None:
+            return
+        existing = load_test_evidence(db.projects_dir, project_id, task_id)
+        if only_if_untested and existing and existing.get("commit_sha") == candidate["commit_sha"]:
+            return
+        run_task_tests(
+            db.projects_dir, project_id, task_id, Path(str(row["clone_path"])),
+            json.loads(row["config_json"]).get("tests", {}), run_fn=test_runner,
+        )
+        broadcaster.publish({"type": "task_tested", "task_id": task_id, "at": utc_now_iso()})
+
     def _run_in_background(task_id: str) -> None:
         """Drive the task's built steps; failures leave the task in its last recorded state."""
         try:
             engine.run_until_halt(task_id)
+            _test_candidate(task_id, only_if_untested=True)
         except Exception:  # noqa: BLE001 - a background crash must not take the server down
             logging.getLogger("atlas.engine").exception("Task %s run failed", task_id)
         with db.read_conn() as conn:
@@ -1509,6 +1564,29 @@ def create_app(
             return load_plan_doc(db.projects_dir, project_id, task_id)
         except CapabilityUnavailableError as exc:
             raise HTTPException(status_code=404, detail="No plan has been drafted for this task yet") from exc
+
+    @app.get("/api/v1/tasks/{task_id}/tests")
+    def get_task_tests(task_id: str) -> dict[str, Any]:
+        project_id, _ = _task_project(task_id)
+        evidence = load_test_evidence(db.projects_dir, project_id, task_id)
+        if evidence is None:
+            raise HTTPException(status_code=404, detail="Tests have not run for this task yet")
+        candidate = load_candidate(db.projects_dir, project_id, task_id)
+        # Evidence only counts for the candidate it was produced from.
+        return {**evidence, "stale": candidate is not None and evidence.get("commit_sha") != candidate["commit_sha"]}
+
+    @app.post("/api/v1/tasks/{task_id}/tests/run", status_code=202)
+    def run_task_tests_endpoint(task_id: str, background: BackgroundTasks) -> dict[str, str]:
+        project_id, state = _task_project(task_id)
+        if state != TaskState.EXECUTING_PHASES.value:
+            raise HTTPException(status_code=409, detail=f"Task is in state {state}; tests run on a finished candidate")
+        if load_candidate(db.projects_dir, project_id, task_id) is None:
+            raise HTTPException(status_code=404, detail="No candidate has been produced for this task yet")
+        existing = load_test_evidence(db.projects_dir, project_id, task_id)
+        if existing and existing.get("status") == "running":
+            raise HTTPException(status_code=409, detail="Tests are already running for this task")
+        background.add_task(_test_candidate, task_id, only_if_untested=False)
+        return {"status": "accepted"}
 
     @app.get("/api/v1/tasks/{task_id}/candidate")
     def get_task_candidate(task_id: str) -> dict[str, Any]:

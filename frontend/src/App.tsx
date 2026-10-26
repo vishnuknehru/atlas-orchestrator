@@ -10,6 +10,8 @@ import { ProjectControls } from "./ProjectControls";
 import { Settings } from "./Settings";
 import { CandidatePanel } from "./CandidatePanel";
 import { PlanPanel } from "./PlanPanel";
+import { TestSettings } from "./TestSettings";
+import { TestsPanel } from "./TestsPanel";
 import { TaskHistory } from "./TaskHistory";
 import { readTheme, applyTheme, Theme } from "./theme";
 
@@ -403,7 +405,7 @@ export function App(): React.ReactElement {
             {/* Project task workspace */}
             {currentProject && !route.taskId && <section className="work-panel space-y-4">
               <div className="project-toolbar"><h2 className="text-base font-semibold text-stone-900">Tasks <span className="text-stone-500">({projectTasks.length})</span></h2><a href="#/" className="text-sm underline">← All projects</a></div>
-              <details className="project-management"><summary>Project settings</summary><ProjectControls key={currentProject.id} project={currentProject} onChanged={async removed => { await loadData(); if (removed) window.location.hash = "#/"; }} /></details>
+              <details className="project-management"><summary>Project settings</summary><ProjectControls key={currentProject.id} project={currentProject} onChanged={async removed => { await loadData(); if (removed) window.location.hash = "#/"; }} /><TestSettings key={`tests-${currentProject.id}`} projectId={currentProject.id} /></details>
 
               {currentProject && currentProject.blocked_reason === "github_credential" && (
                 <div className="bg-amber-50 border border-amber-200 rounded p-3 text-xs text-amber-900 space-y-1">
@@ -669,6 +671,7 @@ export function App(): React.ReactElement {
                     onChanged={() => { void loadData(); void loadTaskDetail(selectedTask.id); }}
                   />
                   <CandidatePanel taskId={selectedTask.id} state={selectedTask.state} version={selectedTask.version} />
+                  <TestsPanel taskId={selectedTask.id} state={selectedTask.state} version={selectedTask.version} />
                   <TaskHistory key={selectedTask.id} taskId={selectedTask.id} version={selectedTask.version} />
                 </div>
               )}

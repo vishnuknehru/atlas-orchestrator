@@ -6,5 +6,18 @@ from atlas.implementation.step import (
     load_candidate,
     make_implement_handler,
 )
+from atlas.implementation.test_evidence import (
+    load_test_evidence,
+    run_task_tests,
+    test_evidence_path,
+)
 
-__all__ = ["candidate_path", "find_violations", "load_candidate", "make_implement_handler"]
+__all__ = [
+    "candidate_path",
+    "find_violations",
+    "load_candidate",
+    "load_test_evidence",
+    "make_implement_handler",
+    "run_task_tests",
+    "test_evidence_path",
+]

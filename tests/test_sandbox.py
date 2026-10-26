@@ -44,7 +44,9 @@ class FakeRunner:
         self.envs: list[dict[str, str]] = []
         self.created: list[str] = []
 
-    def __call__(self, argv: list[str], env: dict[str, str]) -> subprocess.CompletedProcess[str]:
+    def __call__(
+        self, argv: list[str], env: dict[str, str], *, stdin: bytes | None = None, timeout: int | None = None
+    ) -> subprocess.CompletedProcess[str]:
         self.calls.append(argv)
         self.envs.append(env)
 
@@ -123,7 +125,7 @@ def test_start_command_keeps_the_docker_context_and_names_non_default_profiles()
 
 
 def test_contract_args_enforce_the_container_contract() -> None:
-    args = contract_args("ex1", "test", "src-ex1")
+    args = contract_args("ex1", "test", "src-ex1", ["sh", "-c", "true"])
     joined = " ".join(args)
     for fragment in ("--network none", "--user 10001:10001", "--cap-drop ALL", "--security-opt no-new-privileges", "--read-only",
                      "-v src-ex1:/work:ro", "--label atlas.execution_id=ex1", APPROVED_HELPER_IMAGE):

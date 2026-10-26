@@ -399,6 +399,9 @@ class ProjectTestsSpec(BaseModel):
 
     writable_paths: list[str] = Field(default_factory=lambda: [".venv", ".pytest_cache"])
     commands: list[str] = Field(default_factory=list)
+    # Prebuilt image pinned by digest (repository Dockerfile builds are disabled). Saving it is the user's approval.
+    image: str | None = None
+    timeout_seconds: int = Field(default=600, ge=10, le=3600)
 
 
 class ProjectCISpec(BaseModel):
